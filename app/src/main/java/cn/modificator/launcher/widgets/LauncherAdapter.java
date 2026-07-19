@@ -145,7 +145,7 @@ public class LauncherAdapter {
     return holders;
   }
 
-  int getHolderCount() {
+  public int getHolderCount() {
     return holders.size();
   }
 
