@@ -102,9 +102,17 @@ public class Launcher extends Activity
     public void onReceive(Context context, Intent intent) {
       Log.d(TAG, ">>> appChangeReceiver.onReceive: " + intent.getAction()
           + " pkg=" + (intent.getData() != null ? intent.getData().getSchemeSpecificPart() : "null"));
-      iconCache.clearAppCache();
-      dataCenter.refreshAppList(binder.isDelete());
-      Log.d(TAG, "<<< appChangeReceiver done");
+
+      // 延迟 300ms 再查询，避免 PackageManager 缓存尚未刷新
+      // 部分 ROM 上 ACTION_PACKAGE_ADDED 触发时 queryIntentActivities 仍返回旧结果
+      new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
+        @Override
+        public void run() {
+          iconCache.clearAppCache();
+          dataCenter.refreshAppList(binder.isDelete());
+          Log.d(TAG, "<<< appChangeReceiver done (delayed)");
+        }
+      }, 300);
     }
   };
 
@@ -146,6 +154,10 @@ public class Launcher extends Activity
     super.onResume();
     Log.d(TAG, "=== onResume ===");
     registerDynamicReceivers();
+    // 每次回到桌面都重新加载应用列表，避免漏掉安装广播
+    if (dataCenter != null) {
+      dataCenter.refreshAppList(binder.isDelete());
+    }
     refreshIcons();
     Log.d(TAG, "onResume done");
   }
