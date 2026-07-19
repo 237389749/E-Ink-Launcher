@@ -159,6 +159,16 @@ public class AppDataCenter {
   // 内部加载
   // =========================================================================
 
+  private static int getQueryFlags() {
+    if (android.os.Build.VERSION.SDK_INT >= 30) {
+      return android.content.pm.PackageManager.MATCH_ALL;
+    } else if (android.os.Build.VERSION.SDK_INT >= 24) {
+      return android.content.pm.PackageManager.MATCH_DISABLED_COMPONENTS
+          | android.content.pm.PackageManager.MATCH_DISABLED_UNTIL_USED_COMPONENTS;
+    }
+    return 0; // API < 24 默认包含已停用组件
+  }
+
   private void loadApps() {
     Intent mainIntent = new Intent(Intent.ACTION_MAIN, null);
     mainIntent.addCategory(Intent.CATEGORY_LAUNCHER);
@@ -173,8 +183,9 @@ public class AppDataCenter {
     // —— 诊断：全量列出所有已安装包 ——
     dumpAllPackages(mainIntent);
 
-    java.util.List<ResolveInfo> results = mContext.getPackageManager().queryIntentActivities(mainIntent, 0);
-    FileLog.log(TAG, "loadApps: queryIntentActivities(flag=0) returned " + results.size()
+    int flags = getQueryFlags();
+    java.util.List<ResolveInfo> results = mContext.getPackageManager().queryIntentActivities(mainIntent, flags);
+    FileLog.log(TAG, "loadApps: queryIntentActivities(flags=0x" + Integer.toHexString(flags) + ") returned " + results.size()
         + " activities, hideApps=" + hideApps.size());
     for (int i = 0; i < results.size(); i++) {
       ResolveInfo ri = results.get(i);
@@ -216,7 +227,7 @@ public class AppDataCenter {
     mainIntent.addCategory(Intent.CATEGORY_LAUNCHER);
 
     mApps.clear();
-    mApps.addAll(mContext.getPackageManager().queryIntentActivities(mainIntent, 0));
+    mApps.addAll(mContext.getPackageManager().queryIntentActivities(mainIntent, getQueryFlags()));
     mApps.add(createPowerIcon());
     mApps.add(createWifiIcon());
     if (binder != null) {
@@ -298,7 +309,7 @@ public class AppDataCenter {
     }
 
     // 3. 列出未出现在 launcher 查询中但可能有 launcher activity 的包
-    java.util.List<ResolveInfo> launcherResults = pm.queryIntentActivities(launcherIntent, 0);
+    java.util.List<ResolveInfo> launcherResults = pm.queryIntentActivities(launcherIntent, getQueryFlags());
     java.util.Set<String> inLauncher = new java.util.HashSet<>();
     for (ResolveInfo ri : launcherResults) {
       inLauncher.add(ri.activityInfo.packageName);
