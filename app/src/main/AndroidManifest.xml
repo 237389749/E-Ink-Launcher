@@ -63,6 +63,17 @@
             android:name=".ftpservice.FTPReceiver"
             android:exported="false">
         </receiver>
+
+        <receiver
+            android:name=".model.PackageChangeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PACKAGE_ADDED" />
+                <action android:name="android.intent.action.PACKAGE_REMOVED" />
+                <action android:name="android.intent.action.PACKAGE_REPLACED" />
+                <data android:scheme="package" />
+            </intent-filter>
+        </receiver>
         
         <provider
             android:authorities="${applicationId}.fileProvider"

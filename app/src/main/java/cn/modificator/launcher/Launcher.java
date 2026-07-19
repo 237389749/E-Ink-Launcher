@@ -138,7 +138,11 @@ public class Launcher extends Activity
   protected void onResume() {
     super.onResume();
     registerDynamicReceivers();
-    if (dataCenter != null) {
+
+    // 检查是否有新安装/卸载的应用（由 PackageChangeReceiver 标记）
+    boolean needsRefresh = config.getAndClearNeedsRefresh();
+    if (needsRefresh && dataCenter != null) {
+      iconCache.clearAppCache();
       dataCenter.refreshAppList(binder.isDelete());
     }
     refreshIcons();
@@ -308,6 +312,25 @@ public class Launcher extends Activity
     iconCache.markDirty();
     dataCenter.refreshAppList(false);
     refreshIcons();
+  }
+
+  @Override
+  public void onRootRefresh() {
+    new Thread(new Runnable() {
+      @Override
+      public void run() {
+        RootRefreshHelper.forcePackageRefresh();
+        runOnUiThread(new Runnable() {
+          @Override
+          public void run() {
+            iconCache.clearAppCache();
+            iconCache.markDirty();
+            dataCenter.refreshAppList(false);
+            refreshIcons();
+          }
+        });
+      }
+    }).start();
   }
 
   // =========================================================================

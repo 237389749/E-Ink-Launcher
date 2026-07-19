@@ -180,6 +180,21 @@ public class Config {
     prefs.edit().putInt(KEY_APP_NAME_LINES, lines).apply();
   }
 
+  // ---- 应用安装/卸载标记 ----
+
+  /**
+   * 读取并清除"需要刷新应用列表"标记。
+   * 由 {@link cn.modificator.launcher.model.PackageChangeReceiver} 写入，
+   * 由 {@link Launcher#onResume()} 消费。
+   */
+  public boolean getAndClearNeedsRefresh() {
+    boolean value = prefs.getBoolean(cn.modificator.launcher.model.PackageChangeReceiver.KEY_NEEDS_REFRESH, false);
+    if (value) {
+      prefs.edit().putBoolean(cn.modificator.launcher.model.PackageChangeReceiver.KEY_NEEDS_REFRESH, false).apply();
+    }
+    return value;
+  }
+
   // ---- 排序方式 ----
 
   public int getSortMode() {

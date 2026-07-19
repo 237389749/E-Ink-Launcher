@@ -80,4 +80,5 @@
     <string name="setting_sort_mode">Sort</string>
     <string name="sort_need_usage_permission">Please grant usage access permission for this sort mode</string>
     <string name="setting_refresh_icons">Refresh Icons</string>
+    <string name="setting_root_refresh">Force Refresh (Root)</string>
 </resources>
