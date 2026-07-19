@@ -4,8 +4,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ResolveInfo;
-import android.util.Log;
 import android.widget.TextView;
+
+import cn.modificator.launcher.FileLog;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -143,13 +144,14 @@ public class AppDataCenter {
   }
 
   public void refreshAppList(boolean showAll) {
-    Log.d(TAG, "refreshAppList showAll=" + showAll + " currentCount=" + mApps.size());
+    FileLog.log(TAG, "refreshAppList showAll=" + showAll + " currentCount=" + mApps.size());
     if (showAll) {
       loadAllApps();
     } else {
       loadApps();
     }
-    Log.d(TAG, "refreshAppList done — newCount=" + mApps.size() + " pageIndex=" + pageIndex + " pageCount=" + pageCount);
+    FileLog.log(TAG, "refreshAppList done — newCount=" + mApps.size()
+        + " pageIndex=" + pageIndex + " pageCount=" + pageCount);
     setPageShow();
   }
 
@@ -168,21 +170,31 @@ public class AppDataCenter {
 
     mApps.clear();
     java.util.List<ResolveInfo> results = mContext.getPackageManager().queryIntentActivities(mainIntent, 0);
-    Log.d(TAG, "loadApps: queryIntentActivities returned " + results.size() + " activities, hideApps=" + hideApps.size());
+    FileLog.log(TAG, "loadApps: queryIntentActivities returned " + results.size()
+        + " activities, hideApps=" + hideApps.size());
+    for (int i = 0; i < results.size(); i++) {
+      ResolveInfo ri = results.get(i);
+      FileLog.log(TAG, "  [" + i + "] pkg=" + ri.activityInfo.packageName
+          + " name=" + ri.activityInfo.name
+          + " label=" + ri.loadLabel(mContext.getPackageManager()));
+    }
 
     for (ResolveInfo resolveInfo : results) {
       if ("cn.modificator.launcher.Launcher".equals(resolveInfo.activityInfo.name)) {
-        Log.d(TAG, "loadApps: skip self: " + resolveInfo.activityInfo.name);
+        FileLog.log(TAG, "loadApps: skip self: " + resolveInfo.activityInfo.name);
         continue;
       }
       if (!hideApps.contains(resolveInfo.activityInfo.packageName)) {
         mApps.add(resolveInfo);
       } else {
-        Log.d(TAG, "loadApps: skip hidden: " + resolveInfo.activityInfo.packageName);
+        FileLog.log(TAG, "loadApps: skip hidden: " + resolveInfo.activityInfo.packageName);
       }
     }
 
-    Log.d(TAG, "loadApps: after filter — " + mApps.size() + " apps (hidden=" + hideApps.size() + ")");
+    FileLog.log(TAG, "loadApps: after filter — " + mApps.size() + " apps (hidden=" + hideApps.size() + ")");
+    for (int i = 0; i < mApps.size(); i++) {
+      FileLog.log(TAG, "  app[" + i + "] " + mApps.get(i).activityInfo.packageName);
+    }
 
     if (!hideApps.contains(LOCK_PACKAGE_NAME)) {
       mApps.add(createPowerIcon());
@@ -190,7 +202,7 @@ public class AppDataCenter {
     if (!hideApps.contains(WIFI_PACKAGE_NAME)) {
       mApps.add(createWifiIcon());
     }
-    Log.d(TAG, "loadApps: after virtual icons — " + mApps.size() + " total");
+    FileLog.log(TAG, "loadApps: after virtual icons — " + mApps.size() + " total");
     sortApps();
     updatePageCount();
   }

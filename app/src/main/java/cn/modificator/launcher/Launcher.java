@@ -26,7 +26,6 @@ import android.view.View;
 import android.view.WindowManager;
 import android.annotation.SuppressLint;
 import android.widget.ImageView;
-import android.util.Log;
 import android.widget.TextView;
 
 import java.text.SimpleDateFormat;
@@ -100,7 +99,7 @@ public class Launcher extends Activity
   private final BroadcastReceiver appChangeReceiver = new BroadcastReceiver() {
     @Override
     public void onReceive(Context context, Intent intent) {
-      Log.d(TAG, ">>> appChangeReceiver.onReceive: " + intent.getAction()
+      FileLog.log(TAG, ">>> appChangeReceiver.onReceive: " + intent.getAction()
           + " pkg=" + (intent.getData() != null ? intent.getData().getSchemeSpecificPart() : "null"));
 
       // 延迟 300ms 再查询，避免 PackageManager 缓存尚未刷新
@@ -110,7 +109,7 @@ public class Launcher extends Activity
         public void run() {
           iconCache.clearAppCache();
           dataCenter.refreshAppList(binder.isDelete());
-          Log.d(TAG, "<<< appChangeReceiver done (delayed)");
+          FileLog.log(TAG, "<<< appChangeReceiver done (delayed)");
         }
       }, 300);
     }
@@ -134,7 +133,7 @@ public class Launcher extends Activity
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
-    Log.d(TAG, "=== onCreate ===");
+    FileLog.log(TAG, "=== onCreate ===");
     setContentView(R.layout.launcher_activity);
 
     config = new Config(this);
@@ -146,25 +145,25 @@ public class Launcher extends Activity
     initViews();
     registerStaticReceivers();
     checkLaunchHomeNotification();
-    Log.d(TAG, "onCreate done — appChangeReceiver registered");
+    FileLog.log(TAG, "onCreate done — appChangeReceiver registered");
   }
 
   @Override
   protected void onResume() {
     super.onResume();
-    Log.d(TAG, "=== onResume ===");
+    FileLog.log(TAG, "=== onResume ===");
     registerDynamicReceivers();
     // 每次回到桌面都重新加载应用列表，避免漏掉安装广播
     if (dataCenter != null) {
       dataCenter.refreshAppList(binder.isDelete());
       // 冷启动时 PackageManager 可能还没扫描完所有包，返回 0 则延迟重试
       if (dataCenter.getAppCount() == 0) {
-        Log.w(TAG, "onResume: app list is empty, scheduling retry (PM may not be ready)");
+        FileLog.log(TAG, "onResume: app list is empty, scheduling retry (PM may not be ready)");
         new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
           @Override
           public void run() {
             if (dataCenter != null) {
-              Log.d(TAG, "onResume retry: reloading app list");
+              FileLog.log(TAG, "onResume retry: reloading app list");
               dataCenter.refreshAppList(binder.isDelete());
               refreshIcons();
             }
@@ -173,20 +172,20 @@ public class Launcher extends Activity
       }
     }
     refreshIcons();
-    Log.d(TAG, "onResume done — appCount=" + (dataCenter != null ? dataCenter.getAppCount() : 0));
+    FileLog.log(TAG, "onResume done — appCount=" + (dataCenter != null ? dataCenter.getAppCount() : 0));
   }
 
   @Override
   protected void onPause() {
     super.onPause();
-    Log.d(TAG, "=== onPause ===");
+    FileLog.log(TAG, "=== onPause ===");
     unregisterDynamicReceivers();
   }
 
   @Override
   protected void onDestroy() {
     super.onDestroy();
-    Log.d(TAG, "=== onDestroy ===");
+    FileLog.log(TAG, "=== onDestroy ===");
     unregisterDynamicReceivers();
     unregisterReceiver(appChangeReceiver);
   }
@@ -233,7 +232,7 @@ public class Launcher extends Activity
     launcherView.configure(config.getColNum(), config.getRowNum(), config.isHideDivider());
     dataCenter.setGridSize(config.getColNum(), config.getRowNum());
 
-    Log.d(TAG, "initViews done: adapter holderCount=" + adapter.getHolderCount()
+    FileLog.log(TAG, "initViews done: adapter holderCount=" + adapter.getHolderCount()
         + " grid=" + config.getColNum() + "x" + config.getRowNum());
 
     // 翻页按钮
@@ -531,7 +530,7 @@ public class Launcher extends Activity
 
   /** 注册生命周期不变的静态广播 */
   private void registerStaticReceivers() {
-    Log.d(TAG, "registerStaticReceivers: registering appChangeReceiver");
+    FileLog.log(TAG, "registerStaticReceivers: registering appChangeReceiver");
     // 应用安装/卸载广播
     IntentFilter appChangeFilter = new IntentFilter();
     appChangeFilter.addAction(Intent.ACTION_PACKAGE_ADDED);
@@ -539,7 +538,7 @@ public class Launcher extends Activity
     appChangeFilter.addAction(Intent.ACTION_PACKAGE_REPLACED);
     appChangeFilter.addDataScheme("package");
     registerCompatReceiver(appChangeReceiver, appChangeFilter);
-    Log.d(TAG, "registerStaticReceivers: appChangeReceiver registered OK");
+    FileLog.log(TAG, "registerStaticReceivers: appChangeReceiver registered OK");
   }
 
   /** 注册跟随 onResume/onPause 的动态广播 */
