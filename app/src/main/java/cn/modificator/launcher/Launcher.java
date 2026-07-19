@@ -138,6 +138,9 @@ public class Launcher extends Activity
   protected void onResume() {
     super.onResume();
     registerDynamicReceivers();
+    if (dataCenter != null) {
+      dataCenter.refreshAppList(binder.isDelete());
+    }
     refreshIcons();
   }
 
