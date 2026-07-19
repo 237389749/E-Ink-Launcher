@@ -302,6 +302,14 @@ public class Launcher extends Activity
     dataCenter.refreshAppList(binder.isDelete());
   }
 
+  @Override
+  public void onRefreshIcons() {
+    iconCache.clearAppCache();
+    iconCache.markDirty();
+    dataCenter.refreshAppList(false);
+    refreshIcons();
+  }
+
   // =========================================================================
   // 布局更新
   // =========================================================================
