@@ -267,68 +267,28 @@ public class AppDataCenter {
   private void dumpAllPackages(Intent launcherIntent) {
     android.content.pm.PackageManager pm = mContext.getPackageManager();
 
-    // 1. 列出所有已安装的包
-    java.util.List<android.content.pm.PackageInfo> allPkgs =
-        pm.getInstalledPackages(0);
+    // 列出所有已安装包及其启用状态
+    java.util.List<android.content.pm.PackageInfo> allPkgs = pm.getInstalledPackages(0);
     FileLog.log(TAG, "=== DIAGNOSTIC: getInstalledPackages returned "
         + allPkgs.size() + " total packages ===");
-    java.util.Set<String> allPkgNames = new java.util.HashSet<>();
+    int enabledCount = 0, disabledCount = 0;
     for (android.content.pm.PackageInfo pi : allPkgs) {
-      allPkgNames.add(pi.packageName);
-      // 检查是否有 LAUNCHER activity
-      boolean hasLauncher = false;
-      if (pi.activities != null) {
-        for (android.content.pm.ActivityInfo ai : pi.activities) {
-          for (android.content.IntentFilter filter : ai.filterIntents()) {
-            if (filter.hasAction(Intent.ACTION_MAIN)
-                && filter.hasCategory(Intent.CATEGORY_LAUNCHER)) {
-              hasLauncher = true;
-              break;
-            }
-          }
-          if (hasLauncher) break;
-        }
+      boolean enabled = pi.applicationInfo.enabled;
+      if (enabled) enabledCount++; else disabledCount++;
+      if (!enabled) {
+        FileLog.log(TAG, "  DISABLED: " + pi.packageName);
       }
-      FileLog.log(TAG, "  [" + pi.packageName + "] hasLauncher=" + hasLauncher
-          + " enabled=" + pi.applicationInfo.enabled
-          + " flags=" + Integer.toHexString(pi.applicationInfo.flags));
     }
+    FileLog.log(TAG, "enabled=" + enabledCount + " disabled=" + disabledCount);
 
-    // 2. 用不同 flag 查 queryIntentActivities
-    try {
-      java.util.List<ResolveInfo> matchAll = pm.queryIntentActivities(launcherIntent,
-          android.content.pm.PackageManager.MATCH_ALL);
-      FileLog.log(TAG, "=== queryIntentActivities(MATCH_ALL) returned "
-          + matchAll.size() + " activities ===");
-      for (ResolveInfo ri : matchAll) {
-        FileLog.log(TAG, "  pkg=" + ri.activityInfo.packageName
-            + " name=" + ri.activityInfo.name);
-      }
-    } catch (Exception e) {
-      FileLog.log(TAG, "queryIntentActivities(MATCH_ALL) failed: " + e.getMessage(), e);
-    }
-
-    // 3. 列出未出现在 launcher 查询中但可能有 launcher activity 的包
-    java.util.List<ResolveInfo> launcherResults = pm.queryIntentActivities(launcherIntent, getQueryFlags());
-    java.util.Set<String> inLauncher = new java.util.HashSet<>();
-    for (ResolveInfo ri : launcherResults) {
-      inLauncher.add(ri.activityInfo.packageName);
-    }
-    java.util.List<String> missing = new java.util.ArrayList<>();
-    for (String pkg : allPkgNames) {
-      if (!inLauncher.contains(pkg)
-          && !pkg.startsWith("com.android.")
-          && !pkg.startsWith("com.google.")
-          && !pkg.startsWith("android.")) {
-        missing.add(pkg);
-      }
-    }
-    if (!missing.isEmpty()) {
-      FileLog.log(TAG, "=== MISSING from launcher ("
-          + missing.size() + " third-party packages) ===");
-      for (String pkg : missing) {
-        FileLog.log(TAG, "  MISSING: " + pkg);
-      }
+    // 对比不同 flag 的查询结果
+    java.util.List<ResolveInfo> defaultQuery = pm.queryIntentActivities(launcherIntent, 0);
+    java.util.List<ResolveInfo> fullQuery = pm.queryIntentActivities(launcherIntent, getQueryFlags());
+    FileLog.log(TAG, "queryIntentActivities(flag=0) → " + defaultQuery.size() + " results");
+    FileLog.log(TAG, "queryIntentActivities(flag=MATCH_ALL) → " + fullQuery.size() + " results");
+    if (fullQuery.size() > defaultQuery.size()) {
+      FileLog.log(TAG, ">>> " + (fullQuery.size() - defaultQuery.size())
+          + " apps hidden due to disabled flag!");
     }
     FileLog.log(TAG, "=== DIAGNOSTIC END ===");
   }
