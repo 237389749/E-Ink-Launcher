@@ -109,6 +109,11 @@ public class AppDataCenter {
     this.sortMode = sortMode;
   }
 
+  /** 返回当前加载的应用总数（含虚拟图标）。 */
+  public int getAppCount() {
+    return mApps.size();
+  }
+
   public int getSortMode() {
     return sortMode;
   }

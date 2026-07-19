@@ -157,9 +157,23 @@ public class Launcher extends Activity
     // 每次回到桌面都重新加载应用列表，避免漏掉安装广播
     if (dataCenter != null) {
       dataCenter.refreshAppList(binder.isDelete());
+      // 冷启动时 PackageManager 可能还没扫描完所有包，返回 0 则延迟重试
+      if (dataCenter.getAppCount() == 0) {
+        Log.w(TAG, "onResume: app list is empty, scheduling retry (PM may not be ready)");
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
+          @Override
+          public void run() {
+            if (dataCenter != null) {
+              Log.d(TAG, "onResume retry: reloading app list");
+              dataCenter.refreshAppList(binder.isDelete());
+              refreshIcons();
+            }
+          }
+        }, 1500);
+      }
     }
     refreshIcons();
-    Log.d(TAG, "onResume done");
+    Log.d(TAG, "onResume done — appCount=" + (dataCenter != null ? dataCenter.getAppCount() : 0));
   }
 
   @Override
