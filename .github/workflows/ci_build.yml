@@ -41,7 +41,7 @@ jobs:
 
       - name: Run lint
         continue-on-error: true
-        run: ./gradlew :app:lintDebug --continue
+        run: ./gradlew :app:lintVitalRelease --continue
 
   build:
     runs-on: ubuntu-latest

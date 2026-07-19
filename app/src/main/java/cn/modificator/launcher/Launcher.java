@@ -27,6 +27,8 @@ import android.view.WindowManager;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import androidx.activity.OnBackPressedCallback;
+
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Locale;
@@ -241,6 +243,18 @@ public class Launcher extends Activity
     } catch (PackageManager.NameNotFoundException e) {
       e.printStackTrace();
     }
+
+    // 拦截返回键：首页时消费事件，设置页时正常回退
+    getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+      @Override
+      public void handleOnBackPressed() {
+        if (getFragmentManager().getBackStackEntryCount() > 0) {
+          setEnabled(false);
+          getOnBackPressedDispatcher().onBackPressed();
+          setEnabled(true);
+        }
+      }
+    });
   }
 
   // =========================================================================
@@ -567,18 +581,8 @@ public class Launcher extends Activity
     } else if (keyCode == KeyEvent.KEYCODE_PAGE_DOWN) {
       dataCenter.showNextPage();
       return true;
-    } else if (keyCode == KeyEvent.KEYCODE_BACK) {
-      return true;
     }
     return super.onKeyUp(keyCode, event);
-  }
-
-  @Override
-  public boolean onKeyDown(int keyCode, KeyEvent event) {
-    if (keyCode == KeyEvent.KEYCODE_BACK && getFragmentManager().getBackStackEntryCount() == 0) {
-      return true;
-    }
-    return super.onKeyDown(keyCode, event);
   }
 
   @Override
