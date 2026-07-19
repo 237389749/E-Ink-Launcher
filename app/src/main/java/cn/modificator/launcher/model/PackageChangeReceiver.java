@@ -13,7 +13,7 @@ import android.content.SharedPreferences;
 public class PackageChangeReceiver extends BroadcastReceiver {
 
   private static final String PREFS = "launcherPropertyFile";
-  static final String KEY_NEEDS_REFRESH = "needsAppRefresh";
+  public static final String KEY_NEEDS_REFRESH = "needsAppRefresh";
 
   @Override
   public void onReceive(Context context, Intent intent) {
