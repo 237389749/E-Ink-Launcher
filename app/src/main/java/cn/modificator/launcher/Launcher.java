@@ -346,11 +346,18 @@ public class Launcher extends Activity
         : GestureNavHelper.switchToGesture();
     if (!ok) {
       new AlertDialog.Builder(this)
-          .setTitle("Navigation Switch Failed")
-          .setMessage("Cannot write system setting. Try with root or grant WRITE_SECURE_SETTINGS via ADB:\n"
+          .setTitle("权限不足")
+          .setMessage("无法写入系统手势设置。请使用以下任意方式授权：\n\n"
+              + "1. Shizuku：安装 Shizuku 并启动服务\n"
+              + "2. Root：Magisk / SuperSU 等\n"
+              + "3. ADB 命令：\n"
               + "adb shell pm grant cn.modificator.launcher android.permission.WRITE_SECURE_SETTINGS")
           .setPositiveButton(R.string.dialog_close, null)
           .show();
+    } else {
+      // 切换成功，更新标签
+      String method = GestureNavHelper.getLastSuccessMethod();
+      FileLog.log(TAG, "Gesture toggle OK via " + method);
     }
   }
 
