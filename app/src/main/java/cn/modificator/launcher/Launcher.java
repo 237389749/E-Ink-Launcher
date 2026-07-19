@@ -338,6 +338,22 @@ public class Launcher extends Activity
     dataCenter.refreshAppList(binder.isDelete());
   }
 
+  @Override
+  public void onToggleGestureNav() {
+    boolean current = GestureNavHelper.isGestureMode();
+    boolean ok = current
+        ? GestureNavHelper.switchToVirtualKey()
+        : GestureNavHelper.switchToGesture();
+    if (!ok) {
+      new AlertDialog.Builder(this)
+          .setTitle("Navigation Switch Failed")
+          .setMessage("Cannot write system setting. Try with root or grant WRITE_SECURE_SETTINGS via ADB:\n"
+              + "adb shell pm grant cn.modificator.launcher android.permission.WRITE_SECURE_SETTINGS")
+          .setPositiveButton(R.string.dialog_close, null)
+          .show();
+    }
+  }
+
   // =========================================================================
   // 布局更新
   // =========================================================================
