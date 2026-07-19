@@ -232,7 +232,7 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     } else if (id == R.id.showStatusBar) {
       handleToggleStatusBar();
     } else if (id == R.id.helpAbout) {
-      AboutDialog.getInstance(getActivity()).show();
+      AboutDialog.show(getActivity());
     } else if (id == R.id.btnHideFontControl) {
       rootView.findViewById(R.id.menuList).setVisibility(View.VISIBLE);
       rootView.findViewById(R.id.font_control_p).setVisibility(View.GONE);

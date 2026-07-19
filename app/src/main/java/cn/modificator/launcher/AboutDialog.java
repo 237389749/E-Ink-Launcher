@@ -22,8 +22,8 @@ public class AboutDialog {
     this.context = context;
   }
 
-  public static AboutDialog getInstance(Context context) {
-    return new AboutDialog(context);
+  public static void show(Context context) {
+    new AboutDialog(context).show();
   }
 
   private View initLayout() {

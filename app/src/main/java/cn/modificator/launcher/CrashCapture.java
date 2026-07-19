@@ -45,11 +45,9 @@ public class CrashCapture implements Thread.UncaughtExceptionHandler {
   /**
    * 初始化崩溃捕获。
    *
-   * @param context         Application Context
-   * @param restartTime     重启延迟（保留参数，当前不使用）
-   * @param restartActivity 重启目标 Activity（保留参数，当前不使用）
+   * @param context Application Context
    */
-  public void init(Context context, long restartTime, Class<?> restartActivity) {
+  public void init(Context context) {
     appContext = context.getApplicationContext();
     defaultHandler = Thread.getDefaultUncaughtExceptionHandler();
     Thread.setDefaultUncaughtExceptionHandler(this);

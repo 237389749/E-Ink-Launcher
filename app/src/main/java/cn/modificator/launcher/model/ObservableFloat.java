@@ -27,9 +27,9 @@ public class ObservableFloat extends Observable implements Parcelable, Serializa
   public void set(float value) {
     if (mValue != value) {
       this.mValue = value;
+      setChanged();
+      notifyObservers(mValue);
     }
-    setChanged();
-    notifyObservers(mValue);
   }
 
   @Override
