@@ -44,8 +44,6 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     void onShowCustomIconChanged(boolean show);
     void onSortModeChanged(int mode);
     void onEnterManageMode();
-    void onRefreshIcons();
-    void onRootRefresh();
   }
 
   private OnSettingChangeListener listener;
@@ -104,8 +102,6 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     rootView.findViewById(R.id.helpAbout).setOnClickListener(this);
     rootView.findViewById(R.id.menu_ftp).setOnClickListener(this);
     rootView.findViewById(R.id.openDeviceManager).setOnClickListener(this);
-    rootView.findViewById(R.id.refreshIcons).setOnClickListener(this);
-    rootView.findViewById(R.id.rootRefresh).setOnClickListener(this);
 
     showStatusBar = rootView.findViewById(R.id.showStatusBar);
     showCustomIcon = rootView.findViewById(R.id.showCustomIcon);
@@ -254,12 +250,6 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     } else if (id == R.id.openDeviceManager) {
       startActivity(new Intent().setComponent(
           new ComponentName("com.android.settings", "com.android.settings.DeviceAdminSettings")));
-    } else if (id == R.id.refreshIcons) {
-      listener.onRefreshIcons();
-      getActivity().onBackPressed();
-    } else if (id == R.id.rootRefresh) {
-      listener.onRootRefresh();
-      getActivity().onBackPressed();
     }
   }
 

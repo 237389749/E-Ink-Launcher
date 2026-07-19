@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ResolveInfo;
+import android.util.Log;
 import android.widget.TextView;
 
 import java.util.ArrayList;
@@ -20,6 +21,8 @@ import cn.modificator.launcher.widgets.LauncherAdapter;
  * 应用数据管理中心，负责加载应用列表和分页逻辑。
  */
 public class AppDataCenter {
+
+  private static final String TAG = "EInkLauncher";
 
   /** 虚拟包名：Wifi 控制入口 */
   public static final String WIFI_PACKAGE_NAME = "E-ink_Launcher.WiFi";
@@ -135,11 +138,13 @@ public class AppDataCenter {
   }
 
   public void refreshAppList(boolean showAll) {
+    Log.d(TAG, "refreshAppList showAll=" + showAll + " currentCount=" + mApps.size());
     if (showAll) {
       loadAllApps();
     } else {
       loadApps();
     }
+    Log.d(TAG, "refreshAppList done — newCount=" + mApps.size() + " pageIndex=" + pageIndex + " pageCount=" + pageCount);
     setPageShow();
   }
 
@@ -157,12 +162,22 @@ public class AppDataCenter {
     }
 
     mApps.clear();
-    for (ResolveInfo resolveInfo : mContext.getPackageManager().queryIntentActivities(mainIntent, 0)) {
-      if ("cn.modificator.launcher.Launcher".equals(resolveInfo.activityInfo.name)) continue;
+    java.util.List<ResolveInfo> results = mContext.getPackageManager().queryIntentActivities(mainIntent, 0);
+    Log.d(TAG, "loadApps: queryIntentActivities returned " + results.size() + " activities, hideApps=" + hideApps.size());
+
+    for (ResolveInfo resolveInfo : results) {
+      if ("cn.modificator.launcher.Launcher".equals(resolveInfo.activityInfo.name)) {
+        Log.d(TAG, "loadApps: skip self: " + resolveInfo.activityInfo.name);
+        continue;
+      }
       if (!hideApps.contains(resolveInfo.activityInfo.packageName)) {
         mApps.add(resolveInfo);
+      } else {
+        Log.d(TAG, "loadApps: skip hidden: " + resolveInfo.activityInfo.packageName);
       }
     }
+
+    Log.d(TAG, "loadApps: after filter — " + mApps.size() + " apps (hidden=" + hideApps.size() + ")");
 
     if (!hideApps.contains(LOCK_PACKAGE_NAME)) {
       mApps.add(createPowerIcon());
@@ -170,6 +185,7 @@ public class AppDataCenter {
     if (!hideApps.contains(WIFI_PACKAGE_NAME)) {
       mApps.add(createWifiIcon());
     }
+    Log.d(TAG, "loadApps: after virtual icons — " + mApps.size() + " total");
     sortApps();
     updatePageCount();
   }

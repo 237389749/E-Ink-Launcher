@@ -26,6 +26,7 @@ import android.view.View;
 import android.view.WindowManager;
 import android.annotation.SuppressLint;
 import android.widget.ImageView;
+import android.util.Log;
 import android.widget.TextView;
 
 import java.text.SimpleDateFormat;
@@ -52,6 +53,7 @@ public class Launcher extends Activity
     implements AppItemBinder.Callback, EInkLauncherView.OnPageChangeListener,
     SettingFragment.OnSettingChangeListener {
 
+  private static final String TAG = "EInkLauncher";
   private static final int REQUEST_DEVICE_ADMIN = 10001;
 
   // ---- Views ----
@@ -98,8 +100,11 @@ public class Launcher extends Activity
   private final BroadcastReceiver appChangeReceiver = new BroadcastReceiver() {
     @Override
     public void onReceive(Context context, Intent intent) {
+      Log.d(TAG, ">>> appChangeReceiver.onReceive: " + intent.getAction()
+          + " pkg=" + (intent.getData() != null ? intent.getData().getSchemeSpecificPart() : "null"));
       iconCache.clearAppCache();
       dataCenter.refreshAppList(binder.isDelete());
+      Log.d(TAG, "<<< appChangeReceiver done");
     }
   };
 
@@ -121,6 +126,7 @@ public class Launcher extends Activity
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
+    Log.d(TAG, "=== onCreate ===");
     setContentView(R.layout.launcher_activity);
 
     config = new Config(this);
@@ -132,31 +138,29 @@ public class Launcher extends Activity
     initViews();
     registerStaticReceivers();
     checkLaunchHomeNotification();
+    Log.d(TAG, "onCreate done — appChangeReceiver registered");
   }
 
   @Override
   protected void onResume() {
     super.onResume();
+    Log.d(TAG, "=== onResume ===");
     registerDynamicReceivers();
-
-    // 检查是否有新安装/卸载的应用（由 PackageChangeReceiver 标记）
-    boolean needsRefresh = config.getAndClearNeedsRefresh();
-    if (needsRefresh && dataCenter != null) {
-      iconCache.clearAppCache();
-      dataCenter.refreshAppList(binder.isDelete());
-    }
     refreshIcons();
+    Log.d(TAG, "onResume done");
   }
 
   @Override
   protected void onPause() {
     super.onPause();
+    Log.d(TAG, "=== onPause ===");
     unregisterDynamicReceivers();
   }
 
   @Override
   protected void onDestroy() {
     super.onDestroy();
+    Log.d(TAG, "=== onDestroy ===");
     unregisterDynamicReceivers();
     unregisterReceiver(appChangeReceiver);
   }
@@ -202,6 +206,9 @@ public class Launcher extends Activity
     // 一次性配置网格参数，避免多次重建
     launcherView.configure(config.getColNum(), config.getRowNum(), config.isHideDivider());
     dataCenter.setGridSize(config.getColNum(), config.getRowNum());
+
+    Log.d(TAG, "initViews done: adapter holderCount=" + adapter.getHolderCount()
+        + " grid=" + config.getColNum() + "x" + config.getRowNum());
 
     // 翻页按钮
     findViewById(R.id.lastPage).setOnClickListener(new View.OnClickListener() {
@@ -304,33 +311,6 @@ public class Launcher extends Activity
   public void onSortModeChanged(int mode) {
     dataCenter.setSortMode(mode);
     dataCenter.refreshAppList(binder.isDelete());
-  }
-
-  @Override
-  public void onRefreshIcons() {
-    iconCache.clearAppCache();
-    iconCache.markDirty();
-    dataCenter.refreshAppList(false);
-    refreshIcons();
-  }
-
-  @Override
-  public void onRootRefresh() {
-    new Thread(new Runnable() {
-      @Override
-      public void run() {
-        RootRefreshHelper.forcePackageRefresh();
-        runOnUiThread(new Runnable() {
-          @Override
-          public void run() {
-            iconCache.clearAppCache();
-            iconCache.markDirty();
-            dataCenter.refreshAppList(false);
-            refreshIcons();
-          }
-        });
-      }
-    }).start();
   }
 
   // =========================================================================
@@ -525,6 +505,7 @@ public class Launcher extends Activity
 
   /** 注册生命周期不变的静态广播 */
   private void registerStaticReceivers() {
+    Log.d(TAG, "registerStaticReceivers: registering appChangeReceiver");
     // 应用安装/卸载广播
     IntentFilter appChangeFilter = new IntentFilter();
     appChangeFilter.addAction(Intent.ACTION_PACKAGE_ADDED);
@@ -532,6 +513,7 @@ public class Launcher extends Activity
     appChangeFilter.addAction(Intent.ACTION_PACKAGE_REPLACED);
     appChangeFilter.addDataScheme("package");
     registerCompatReceiver(appChangeReceiver, appChangeFilter);
+    Log.d(TAG, "registerStaticReceivers: appChangeReceiver registered OK");
   }
 
   /** 注册跟随 onResume/onPause 的动态广播 */
