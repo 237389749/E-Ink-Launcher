@@ -169,8 +169,12 @@ public class AppDataCenter {
     }
 
     mApps.clear();
+
+    // —— 诊断：全量列出所有已安装包 ——
+    dumpAllPackages(mainIntent);
+
     java.util.List<ResolveInfo> results = mContext.getPackageManager().queryIntentActivities(mainIntent, 0);
-    FileLog.log(TAG, "loadApps: queryIntentActivities returned " + results.size()
+    FileLog.log(TAG, "loadApps: queryIntentActivities(flag=0) returned " + results.size()
         + " activities, hideApps=" + hideApps.size());
     for (int i = 0; i < results.size(); i++) {
       ResolveInfo ri = results.get(i);
@@ -239,6 +243,83 @@ public class AppDataCenter {
 
   private void sortApps() {
     Collections.sort(mApps, new AppSortComparator(mContext, mContext.getPackageManager(), sortMode));
+  }
+
+  // =========================================================================
+  // 诊断：全量包扫描
+  // =========================================================================
+
+  /**
+   * 列出设备上所有已安装包，与 Launcher 查询结果对比。
+   * 用于诊断"应用装上了但桌面不显示"的问题。
+   */
+  private void dumpAllPackages(Intent launcherIntent) {
+    android.content.pm.PackageManager pm = mContext.getPackageManager();
+
+    // 1. 列出所有已安装的包
+    java.util.List<android.content.pm.PackageInfo> allPkgs =
+        pm.getInstalledPackages(0);
+    FileLog.log(TAG, "=== DIAGNOSTIC: getInstalledPackages returned "
+        + allPkgs.size() + " total packages ===");
+    java.util.Set<String> allPkgNames = new java.util.HashSet<>();
+    for (android.content.pm.PackageInfo pi : allPkgs) {
+      allPkgNames.add(pi.packageName);
+      // 检查是否有 LAUNCHER activity
+      boolean hasLauncher = false;
+      if (pi.activities != null) {
+        for (android.content.pm.ActivityInfo ai : pi.activities) {
+          for (android.content.IntentFilter filter : ai.filterIntents()) {
+            if (filter.hasAction(Intent.ACTION_MAIN)
+                && filter.hasCategory(Intent.CATEGORY_LAUNCHER)) {
+              hasLauncher = true;
+              break;
+            }
+          }
+          if (hasLauncher) break;
+        }
+      }
+      FileLog.log(TAG, "  [" + pi.packageName + "] hasLauncher=" + hasLauncher
+          + " enabled=" + pi.applicationInfo.enabled
+          + " flags=" + Integer.toHexString(pi.applicationInfo.flags));
+    }
+
+    // 2. 用不同 flag 查 queryIntentActivities
+    try {
+      java.util.List<ResolveInfo> matchAll = pm.queryIntentActivities(launcherIntent,
+          android.content.pm.PackageManager.MATCH_ALL);
+      FileLog.log(TAG, "=== queryIntentActivities(MATCH_ALL) returned "
+          + matchAll.size() + " activities ===");
+      for (ResolveInfo ri : matchAll) {
+        FileLog.log(TAG, "  pkg=" + ri.activityInfo.packageName
+            + " name=" + ri.activityInfo.name);
+      }
+    } catch (Exception e) {
+      FileLog.log(TAG, "queryIntentActivities(MATCH_ALL) failed: " + e.getMessage(), e);
+    }
+
+    // 3. 列出未出现在 launcher 查询中但可能有 launcher activity 的包
+    java.util.List<ResolveInfo> launcherResults = pm.queryIntentActivities(launcherIntent, 0);
+    java.util.Set<String> inLauncher = new java.util.HashSet<>();
+    for (ResolveInfo ri : launcherResults) {
+      inLauncher.add(ri.activityInfo.packageName);
+    }
+    java.util.List<String> missing = new java.util.ArrayList<>();
+    for (String pkg : allPkgNames) {
+      if (!inLauncher.contains(pkg)
+          && !pkg.startsWith("com.android.")
+          && !pkg.startsWith("com.google.")
+          && !pkg.startsWith("android.")) {
+        missing.add(pkg);
+      }
+    }
+    if (!missing.isEmpty()) {
+      FileLog.log(TAG, "=== MISSING from launcher ("
+          + missing.size() + " third-party packages) ===");
+      for (String pkg : missing) {
+        FileLog.log(TAG, "  MISSING: " + pkg);
+      }
+    }
+    FileLog.log(TAG, "=== DIAGNOSTIC END ===");
   }
 
   // =========================================================================
