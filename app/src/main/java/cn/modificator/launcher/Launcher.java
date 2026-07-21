@@ -71,6 +71,7 @@ public class Launcher extends Activity
   private LauncherAdapter adapter;
   private AppItemBinder binder;
   private boolean isSystemApp = false;
+  private boolean isFirstResume = true; // 冷启动标记
 
   // ---- Device Admin ----
   private DevicePolicyManager policyManager;
@@ -151,24 +152,30 @@ public class Launcher extends Activity
   @Override
   protected void onResume() {
     super.onResume();
-    FileLog.log(TAG, "=== onResume ===");
+    FileLog.log(TAG, "=== onResume === isFirst=" + isFirstResume);
     registerDynamicReceivers();
-    // 每次回到桌面都重新加载应用列表，避免漏掉安装广播
     if (dataCenter != null) {
       dataCenter.refreshAppList(binder.isDelete());
-      // 冷启动时 PackageManager 可能还没扫描完所有包，返回 0 则延迟重试
-      if (dataCenter.getAppCount() == 0) {
-        FileLog.log(TAG, "onResume: app list is empty, scheduling retry (PM may not be ready)");
+
+      // 冷启动时无论首次查到多少应用，都延迟重试一次。
+      // Poke6 开机时 PM 只返回系统应用，被停用的第三方 App 要等
+      // PM 完全就绪后才出现在 queryIntentActivities 结果中。
+      if (isFirstResume) {
+        isFirstResume = false;
+        FileLog.log(TAG, "onResume: cold boot, scheduling retry in 2s (count="
+            + dataCenter.getAppCount() + ")");
         new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
           @Override
           public void run() {
             if (dataCenter != null) {
-              FileLog.log(TAG, "onResume retry: reloading app list");
+              FileLog.log(TAG, "onResume retry: reloading app list (was "
+                  + dataCenter.getAppCount() + " apps)");
               dataCenter.refreshAppList(binder.isDelete());
               refreshIcons();
+              FileLog.log(TAG, "onResume retry done — count=" + dataCenter.getAppCount());
             }
           }
-        }, 1500);
+        }, 2000);
       }
     }
     refreshIcons();
