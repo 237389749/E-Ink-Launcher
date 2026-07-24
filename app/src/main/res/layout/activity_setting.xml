@@ -529,6 +529,20 @@
                 android:background="#000000" />
 
             <TextView
+                android:id="@+id/refreshModeSwitcher"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:gravity="center_vertical"
+                android:paddingLeft="20dp"
+                android:text="@string/setting_refresh_mode"
+                android:textSize="@dimen/menu_item_text_size" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#000000" />
+
+            <TextView
                 android:id="@+id/toggleGestureNav"
                 android:layout_width="match_parent"
                 android:layout_height="50dp"

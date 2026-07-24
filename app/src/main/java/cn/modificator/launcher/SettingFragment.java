@@ -2,7 +2,9 @@ package cn.modificator.launcher;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.Fragment;
+import android.content.DialogInterface;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
@@ -45,6 +47,7 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     void onSortModeChanged(int mode);
     void onEnterManageMode();
     void onToggleGestureNav();
+    void onRefreshModeSelected(int index);
   }
 
   private OnSettingChangeListener listener;
@@ -104,6 +107,7 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     rootView.findViewById(R.id.menu_ftp).setOnClickListener(this);
     rootView.findViewById(R.id.openDeviceManager).setOnClickListener(this);
     rootView.findViewById(R.id.toggleGestureNav).setOnClickListener(this);
+    rootView.findViewById(R.id.refreshModeSwitcher).setOnClickListener(this);
 
     showStatusBar = rootView.findViewById(R.id.showStatusBar);
     showCustomIcon = rootView.findViewById(R.id.showCustomIcon);
@@ -128,6 +132,19 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     fontControl.setProgress((int) ((config.getFontSize() - 10) * 10));
 
     updateGestureNavLabel();
+  }
+
+  private void showRefreshModeDialog() {
+    final String[] labels = RefreshModeHelper.LABELS;
+    new AlertDialog.Builder(getActivity())
+        .setTitle(R.string.setting_refresh_mode)
+        .setItems(labels, new DialogInterface.OnClickListener() {
+          @Override
+          public void onClick(DialogInterface dialog, int which) {
+            listener.onRefreshModeSelected(which);
+          }
+        })
+        .show();
   }
 
   private void updateGestureNavLabel() {
@@ -265,6 +282,8 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     } else if (id == R.id.toggleGestureNav) {
       listener.onToggleGestureNav();
       updateGestureNavLabel();
+    } else if (id == R.id.refreshModeSwitcher) {
+      showRefreshModeDialog();
     }
   }
 

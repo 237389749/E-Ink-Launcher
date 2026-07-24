@@ -346,6 +346,13 @@ public class Launcher extends Activity
   }
 
   @Override
+  public void onRefreshModeSelected(int index) {
+    if (index < 0 || index >= RefreshModeHelper.MODES.length) return;
+    RefreshModeHelper.apply(RefreshModeHelper.MODES[index]);
+    FileLog.log(TAG, "Refresh mode selected: " + RefreshModeHelper.LABELS[index]);
+  }
+
+  @Override
   public void onToggleGestureNav() {
     boolean current = GestureNavHelper.isGestureMode();
     boolean ok = current
