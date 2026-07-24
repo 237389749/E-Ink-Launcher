@@ -133,6 +133,48 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     fontControl.setProgress((int) ((config.getFontSize() - 10) * 10));
 
     updateGestureNavLabel();
+    updateClickRefreshLabel();
+  }
+
+  private static final int[] CLICK_MODES = {
+      Config.CLICK_REFRESH_OFF,
+      Config.CLICK_REFRESH_GU,
+      Config.CLICK_REFRESH_GC,
+  };
+
+  private void cycleClickRefresh() {
+    int current = Config.getClickRefreshMode(getActivity());
+    int next = CLICK_MODES[(indexOf(CLICK_MODES, current) + 1) % CLICK_MODES.length];
+    Config.setClickRefreshMode(getActivity(), next);
+
+    if (next == Config.CLICK_REFRESH_OFF) {
+      RefreshModeHelper.setAccessibilityEnabled(false);
+    } else {
+      RefreshModeHelper.setAccessibilityEnabled(true);
+    }
+
+    updateClickRefreshLabel();
+  }
+
+  private static int indexOf(int[] arr, int val) {
+    for (int i = 0; i < arr.length; i++) {
+      if (arr[i] == val) return i;
+    }
+    return 0;
+  }
+
+  private void updateClickRefreshLabel() {
+    TextView tv = rootView.findViewById(R.id.clickRefresh);
+    int mode = Config.getClickRefreshMode(getActivity());
+    String status;
+    if (mode == Config.CLICK_REFRESH_GU) {
+      status = getString(R.string.click_refresh_gu);
+    } else if (mode == Config.CLICK_REFRESH_GC) {
+      status = getString(R.string.click_refresh_gc);
+    } else {
+      status = getString(R.string.click_refresh_off);
+    }
+    tv.setText(getString(R.string.setting_click_refresh, status));
   }
 
   private void showRefreshModeDialog() {
@@ -286,7 +328,7 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     } else if (id == R.id.refreshMode) {
       showRefreshModeDialog();
     } else if (id == R.id.clickRefresh) {
-      getActivity().startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+      cycleClickRefresh();
     } else if (id == R.id.toggleGestureNav) {
       listener.onToggleGestureNav();
       updateGestureNavLabel();

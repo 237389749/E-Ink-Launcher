@@ -81,8 +81,11 @@
     <string name="sort_need_usage_permission">Please grant usage access permission for this sort mode</string>
     <string name="setting_refresh_screen">Refresh Screen</string>
     <string name="setting_refresh_mode">Global Refresh Mode</string>
-    <string name="setting_click_refresh">Click-to-Refresh Service</string>
+    <string name="setting_click_refresh">Click Refresh: %s</string>
     <string name="as_refresh_description">Refresh screen on every click to keep E-Ink display responsive on slow panels.</string>
+    <string name="click_refresh_off">OFF</string>
+    <string name="click_refresh_gu">GU (no flash)</string>
+    <string name="click_refresh_gc">GC (full refresh)</string>
     <string name="setting_gesture_nav">Gesture Navigation</string>
     <string name="setting_virtual_key_nav">Virtual Key Navigation</string>
 </resources>

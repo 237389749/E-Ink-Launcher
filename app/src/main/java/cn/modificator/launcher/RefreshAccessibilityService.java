@@ -5,23 +5,20 @@ import android.content.Intent;
 import android.view.accessibility.AccessibilityEvent;
 
 /**
- * 全系统"每次点击即刷新屏幕"辅助服务。
- * 监听所有 TYPE_VIEW_CLICKED 事件，触发全屏刷新(GU 无闪烁)。
- * 解决硬件屏幕响应慢、需要持续刷新才能正常加载的问题。
+ * 全系统点击刷新辅助服务。
+ * 监听 TYPE_VIEW_CLICKED，根据 Config 选择 GU（无闪烁）或 GC（全刷）刷新。
  */
 public class RefreshAccessibilityService extends AccessibilityService {
-
-  private static boolean serviceRunning = false;
-
-  public static boolean isRunning() {
-    return serviceRunning;
-  }
 
   @Override
   public void onAccessibilityEvent(AccessibilityEvent event) {
     if (event.getEventType() == AccessibilityEvent.TYPE_VIEW_CLICKED) {
-      // GU 无闪烁全屏刷新
-      RefreshModeHelper.refreshGU();
+      int mode = Config.getClickRefreshMode(this);
+      if (mode == Config.CLICK_REFRESH_GU) {
+        RefreshModeHelper.refreshGU();
+      } else if (mode == Config.CLICK_REFRESH_GC) {
+        RefreshModeHelper.refreshGC();
+      }
     }
   }
 
@@ -32,14 +29,12 @@ public class RefreshAccessibilityService extends AccessibilityService {
   @Override
   protected void onServiceConnected() {
     super.onServiceConnected();
-    serviceRunning = true;
     FileLog.log("RefreshAS", "Service connected");
   }
 
   @Override
   public void onDestroy() {
     super.onDestroy();
-    serviceRunning = false;
     FileLog.log("RefreshAS", "Service destroyed");
   }
 }
