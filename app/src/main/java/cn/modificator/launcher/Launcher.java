@@ -391,12 +391,27 @@ public class Launcher extends Activity
     } else if (AppDataCenter.WIFI_PACKAGE_NAME.equals(pkgName)) {
       WifiControl.onClickWifiItem();
     } else {
+      // 启动应用前 GU 无声全屏刷新，清除桌面残影
+      refreshScreenGU();
+
       ComponentName comp = new ComponentName(info.activityInfo.packageName, info.activityInfo.name);
       Intent intent = new Intent(Intent.ACTION_MAIN);
       intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
       intent.addCategory(Intent.CATEGORY_LAUNCHER);
       intent.setComponent(comp);
       startActivity(intent);
+    }
+  }
+
+  /** GU 无闪烁全屏刷新，通过反射调用 EpdController.repaintEveryThing(UpdateMode.GU) */
+  private void refreshScreenGU() {
+    try {
+      Class<?> epdClass = Class.forName("com.onyx.android.sdk.api.device.epd.EpdController");
+      Class<?> modeClass = Class.forName("com.onyx.android.sdk.api.device.epd.UpdateMode");
+      Object gu = Enum.valueOf((Class<Enum>) modeClass, "GU");
+      epdClass.getMethod("repaintEveryThing", modeClass).invoke(null, gu);
+    } catch (Exception ignored) {
+      // 非 Onyx 设备静默忽略
     }
   }
 
