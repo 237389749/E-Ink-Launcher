@@ -265,6 +265,7 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     } else if (id == R.id.toggleGestureNav) {
       listener.onToggleGestureNav();
       updateGestureNavLabel();
+    }
   }
 
   private void handleDeleteApp() {
