@@ -104,6 +104,7 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     rootView.findViewById(R.id.menu_ftp).setOnClickListener(this);
     rootView.findViewById(R.id.openDeviceManager).setOnClickListener(this);
     rootView.findViewById(R.id.toggleGestureNav).setOnClickListener(this);
+    rootView.findViewById(R.id.refreshScreen).setOnClickListener(this);
 
     showStatusBar = rootView.findViewById(R.id.showStatusBar);
     showCustomIcon = rootView.findViewById(R.id.showCustomIcon);
@@ -262,6 +263,9 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     } else if (id == R.id.openDeviceManager) {
       startActivity(new Intent().setComponent(
           new ComponentName("com.android.settings", "com.android.settings.DeviceAdminSettings")));
+    } else if (id == R.id.refreshScreen) {
+      getActivity().sendBroadcast(new Intent("onyx.android.intent.action.REFRESH_SCREEN"));
+      getActivity().onBackPressed();
     } else if (id == R.id.toggleGestureNav) {
       listener.onToggleGestureNav();
       updateGestureNavLabel();
