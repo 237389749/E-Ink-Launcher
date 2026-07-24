@@ -49,6 +49,17 @@ public class RefreshModeHelper {
     }
   }
 
+  /** 单次 GU 无闪烁全屏刷新（供 AccessibilityService 等频繁调用） */
+  public static void refreshGU() {
+    try {
+      Class<?> ec = Class.forName("com.onyx.android.sdk.api.device.epd.EpdController");
+      Class<?> mc = Class.forName("com.onyx.android.sdk.api.device.epd.UpdateMode");
+      Object gu = Enum.valueOf((Class<Enum>) mc, "GU");
+      ec.getMethod("repaintEveryThing", mc).invoke(null, gu);
+    } catch (Exception ignored) {
+    }
+  }
+
   /** 持久化全局刷新模式 */
   public static void apply(int index) {
     if (index < 0 || index >= MODE_NAMES.length) return;

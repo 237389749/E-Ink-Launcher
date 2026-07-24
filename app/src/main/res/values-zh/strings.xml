@@ -78,6 +78,8 @@
     <string name="setting_gesture_nav">手势导航</string>
     <string name="setting_refresh_screen">刷新屏幕</string>
     <string name="setting_refresh_mode">全局刷新模式</string>
+    <string name="setting_click_refresh">点击刷新服务</string>
+    <string name="as_refresh_description">每次点击触发屏幕刷新，持续刷新以保持墨水屏响应速度。</string>
     <string name="setting_virtual_key_nav">虚拟按键导航</string>
     <string name="launch_failed">启动失败</string>
     <string name="launch_devicemanager">打开设备管理器</string>

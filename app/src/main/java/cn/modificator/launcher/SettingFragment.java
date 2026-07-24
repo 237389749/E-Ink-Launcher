@@ -108,6 +108,7 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     rootView.findViewById(R.id.toggleGestureNav).setOnClickListener(this);
     rootView.findViewById(R.id.refreshScreen).setOnClickListener(this);
     rootView.findViewById(R.id.refreshMode).setOnClickListener(this);
+    rootView.findViewById(R.id.clickRefresh).setOnClickListener(this);
 
     showStatusBar = rootView.findViewById(R.id.showStatusBar);
     showCustomIcon = rootView.findViewById(R.id.showCustomIcon);
@@ -284,6 +285,8 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
       getActivity().onBackPressed();
     } else if (id == R.id.refreshMode) {
       showRefreshModeDialog();
+    } else if (id == R.id.clickRefresh) {
+      getActivity().startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
     } else if (id == R.id.toggleGestureNav) {
       listener.onToggleGestureNav();
       updateGestureNavLabel();
