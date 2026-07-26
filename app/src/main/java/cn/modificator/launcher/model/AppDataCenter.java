@@ -6,8 +6,6 @@ import android.content.pm.ActivityInfo;
 import android.content.pm.ResolveInfo;
 import android.widget.TextView;
 
-import cn.modificator.launcher.FileLog;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -22,8 +20,6 @@ import cn.modificator.launcher.widgets.LauncherAdapter;
  * 应用数据管理中心，负责加载应用列表和分页逻辑。
  */
 public class AppDataCenter {
-
-  private static final String TAG = "EInkLauncher";
 
   /** 虚拟包名：Wifi 控制入口 */
   public static final String WIFI_PACKAGE_NAME = "E-ink_Launcher.WiFi";
@@ -110,11 +106,6 @@ public class AppDataCenter {
     this.sortMode = sortMode;
   }
 
-  /** 返回当前加载的应用总数（含虚拟图标）。 */
-  public int getAppCount() {
-    return mApps.size();
-  }
-
   public int getSortMode() {
     return sortMode;
   }
@@ -144,30 +135,17 @@ public class AppDataCenter {
   }
 
   public void refreshAppList(boolean showAll) {
-    FileLog.log(TAG, "refreshAppList showAll=" + showAll + " currentCount=" + mApps.size());
     if (showAll) {
       loadAllApps();
     } else {
       loadApps();
     }
-    FileLog.log(TAG, "refreshAppList done — newCount=" + mApps.size()
-        + " pageIndex=" + pageIndex + " pageCount=" + pageCount);
     setPageShow();
   }
 
   // =========================================================================
   // 内部加载
   // =========================================================================
-
-  private static int getQueryFlags() {
-    if (android.os.Build.VERSION.SDK_INT >= 30) {
-      return android.content.pm.PackageManager.MATCH_ALL;
-    } else if (android.os.Build.VERSION.SDK_INT >= 24) {
-      return android.content.pm.PackageManager.MATCH_DISABLED_COMPONENTS
-          | android.content.pm.PackageManager.MATCH_DISABLED_UNTIL_USED_COMPONENTS;
-    }
-    return 0; // API < 24 默认包含已停用组件
-  }
 
   private void loadApps() {
     Intent mainIntent = new Intent(Intent.ACTION_MAIN, null);
@@ -179,36 +157,11 @@ public class AppDataCenter {
     }
 
     mApps.clear();
-
-    // —— 诊断：全量列出所有已安装包 ——
-    dumpAllPackages(mainIntent);
-
-    int flags = getQueryFlags();
-    java.util.List<ResolveInfo> results = mContext.getPackageManager().queryIntentActivities(mainIntent, flags);
-    FileLog.log(TAG, "loadApps: queryIntentActivities(flags=0x" + Integer.toHexString(flags) + ") returned " + results.size()
-        + " activities, hideApps=" + hideApps.size());
-    for (int i = 0; i < results.size(); i++) {
-      ResolveInfo ri = results.get(i);
-      FileLog.log(TAG, "  [" + i + "] pkg=" + ri.activityInfo.packageName
-          + " name=" + ri.activityInfo.name
-          + " label=" + ri.loadLabel(mContext.getPackageManager()));
-    }
-
-    for (ResolveInfo resolveInfo : results) {
-      if ("cn.modificator.launcher.Launcher".equals(resolveInfo.activityInfo.name)) {
-        FileLog.log(TAG, "loadApps: skip self: " + resolveInfo.activityInfo.name);
-        continue;
-      }
+    for (ResolveInfo resolveInfo : mContext.getPackageManager().queryIntentActivities(mainIntent, 0)) {
+      if ("cn.modificator.launcher.Launcher".equals(resolveInfo.activityInfo.name)) continue;
       if (!hideApps.contains(resolveInfo.activityInfo.packageName)) {
         mApps.add(resolveInfo);
-      } else {
-        FileLog.log(TAG, "loadApps: skip hidden: " + resolveInfo.activityInfo.packageName);
       }
-    }
-
-    FileLog.log(TAG, "loadApps: after filter — " + mApps.size() + " apps (hidden=" + hideApps.size() + ")");
-    for (int i = 0; i < mApps.size(); i++) {
-      FileLog.log(TAG, "  app[" + i + "] " + mApps.get(i).activityInfo.packageName);
     }
 
     if (!hideApps.contains(LOCK_PACKAGE_NAME)) {
@@ -217,7 +170,6 @@ public class AppDataCenter {
     if (!hideApps.contains(WIFI_PACKAGE_NAME)) {
       mApps.add(createWifiIcon());
     }
-    FileLog.log(TAG, "loadApps: after virtual icons — " + mApps.size() + " total");
     sortApps();
     updatePageCount();
   }
@@ -227,7 +179,7 @@ public class AppDataCenter {
     mainIntent.addCategory(Intent.CATEGORY_LAUNCHER);
 
     mApps.clear();
-    mApps.addAll(mContext.getPackageManager().queryIntentActivities(mainIntent, getQueryFlags()));
+    mApps.addAll(mContext.getPackageManager().queryIntentActivities(mainIntent, 0));
     mApps.add(createPowerIcon());
     mApps.add(createWifiIcon());
     if (binder != null) {
@@ -254,43 +206,6 @@ public class AppDataCenter {
 
   private void sortApps() {
     Collections.sort(mApps, new AppSortComparator(mContext, mContext.getPackageManager(), sortMode));
-  }
-
-  // =========================================================================
-  // 诊断：全量包扫描
-  // =========================================================================
-
-  /**
-   * 列出设备上所有已安装包，与 Launcher 查询结果对比。
-   * 用于诊断"应用装上了但桌面不显示"的问题。
-   */
-  private void dumpAllPackages(Intent launcherIntent) {
-    android.content.pm.PackageManager pm = mContext.getPackageManager();
-
-    // 列出所有已安装包及其启用状态
-    java.util.List<android.content.pm.PackageInfo> allPkgs = pm.getInstalledPackages(0);
-    FileLog.log(TAG, "=== DIAGNOSTIC: getInstalledPackages returned "
-        + allPkgs.size() + " total packages ===");
-    int enabledCount = 0, disabledCount = 0;
-    for (android.content.pm.PackageInfo pi : allPkgs) {
-      boolean enabled = pi.applicationInfo.enabled;
-      if (enabled) enabledCount++; else disabledCount++;
-      if (!enabled) {
-        FileLog.log(TAG, "  DISABLED: " + pi.packageName);
-      }
-    }
-    FileLog.log(TAG, "enabled=" + enabledCount + " disabled=" + disabledCount);
-
-    // 对比不同 flag 的查询结果
-    java.util.List<ResolveInfo> defaultQuery = pm.queryIntentActivities(launcherIntent, 0);
-    java.util.List<ResolveInfo> fullQuery = pm.queryIntentActivities(launcherIntent, getQueryFlags());
-    FileLog.log(TAG, "queryIntentActivities(flag=0) → " + defaultQuery.size() + " results");
-    FileLog.log(TAG, "queryIntentActivities(flag=MATCH_ALL) → " + fullQuery.size() + " results");
-    if (fullQuery.size() > defaultQuery.size()) {
-      FileLog.log(TAG, ">>> " + (fullQuery.size() - defaultQuery.size())
-          + " apps hidden due to disabled flag!");
-    }
-    FileLog.log(TAG, "=== DIAGNOSTIC END ===");
   }
 
   // =========================================================================
