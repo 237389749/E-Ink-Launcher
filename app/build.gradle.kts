@@ -25,7 +25,6 @@ android {
             keyPassword = project.findProperty("androidKeyPassword") as? String ?: ""
         }
     }
-
     buildTypes {
         release {
             isMinifyEnabled = true

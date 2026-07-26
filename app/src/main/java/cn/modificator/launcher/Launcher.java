@@ -24,7 +24,6 @@ import android.text.format.DateFormat;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
-import android.annotation.SuppressLint;
 import android.widget.ImageView;
 import android.widget.TextView;
 
@@ -52,7 +51,6 @@ public class Launcher extends Activity
     implements AppItemBinder.Callback, EInkLauncherView.OnPageChangeListener,
     SettingFragment.OnSettingChangeListener {
 
-  private static final String TAG = "EInkLauncher";
   private static final int REQUEST_DEVICE_ADMIN = 10001;
 
   // ---- Views ----
@@ -200,7 +198,6 @@ public class Launcher extends Activity
     launcherView.configure(config.getColNum(), config.getRowNum(), config.isHideDivider());
     dataCenter.setGridSize(config.getColNum(), config.getRowNum());
 
-
     // 翻页按钮
     findViewById(R.id.lastPage).setOnClickListener(new View.OnClickListener() {
       @Override
@@ -304,29 +301,6 @@ public class Launcher extends Activity
     dataCenter.refreshAppList(binder.isDelete());
   }
 
-  @Override
-  public void onToggleGestureNav() {
-    boolean current = GestureNavHelper.isGestureMode();
-    boolean ok = current
-        ? GestureNavHelper.switchToVirtualKey()
-        : GestureNavHelper.switchToGesture();
-    if (!ok) {
-      new AlertDialog.Builder(this)
-          .setTitle("权限不足")
-          .setMessage("无法写入系统手势设置。请使用以下任意方式授权：\n\n"
-              + "1. Shizuku：安装 Shizuku 并启动服务\n"
-              + "2. Root：Magisk / SuperSU 等\n"
-              + "3. ADB 命令：\n"
-              + "adb shell pm grant cn.modificator.launcher android.permission.WRITE_SECURE_SETTINGS")
-          .setPositiveButton(R.string.dialog_close, null)
-          .show();
-    } else {
-      // 切换成功，更新标签
-      String method = GestureNavHelper.getLastSuccessMethod();
-      FileLog.log(TAG, "Gesture toggle OK via " + method);
-    }
-  }
-
   // =========================================================================
   // 布局更新
   // =========================================================================
@@ -350,27 +324,12 @@ public class Launcher extends Activity
     } else if (AppDataCenter.WIFI_PACKAGE_NAME.equals(pkgName)) {
       WifiControl.onClickWifiItem();
     } else {
-      // 启动应用前 GU 无声全屏刷新，清除桌面残影
-      refreshScreenGU();
-
       ComponentName comp = new ComponentName(info.activityInfo.packageName, info.activityInfo.name);
       Intent intent = new Intent(Intent.ACTION_MAIN);
       intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
       intent.addCategory(Intent.CATEGORY_LAUNCHER);
       intent.setComponent(comp);
       startActivity(intent);
-    }
-  }
-
-  /** GU 无闪烁全屏刷新，通过反射调用 EpdController.repaintEveryThing(UpdateMode.GU) */
-  private void refreshScreenGU() {
-    try {
-      Class<?> epdClass = Class.forName("com.onyx.android.sdk.api.device.epd.EpdController");
-      Class<?> modeClass = Class.forName("com.onyx.android.sdk.api.device.epd.UpdateMode");
-      Object gu = Enum.valueOf((Class<Enum>) modeClass, "GU");
-      epdClass.getMethod("repaintEveryThing", modeClass).invoke(null, gu);
-    } catch (Exception ignored) {
-      // 非 Onyx 设备静默忽略
     }
   }
 
@@ -603,7 +562,6 @@ public class Launcher extends Activity
   // 按键处理
   // =========================================================================
 
-  @SuppressLint("GestureBackNavigation")
   @Override
   public boolean onKeyUp(int keyCode, KeyEvent event) {
     if (keyCode == KeyEvent.KEYCODE_PAGE_UP) {
@@ -618,7 +576,6 @@ public class Launcher extends Activity
     return super.onKeyUp(keyCode, event);
   }
 
-  @SuppressLint("GestureBackNavigation")
   @Override
   public boolean onKeyDown(int keyCode, KeyEvent event) {
     if (keyCode == KeyEvent.KEYCODE_BACK && getFragmentManager().getBackStackEntryCount() == 0) {

@@ -180,23 +180,6 @@ public class Config {
     prefs.edit().putInt(KEY_APP_NAME_LINES, lines).apply();
   }
 
-  // ---- 点击刷新模式 ----
-
-  public static final int CLICK_REFRESH_OFF = 0;
-  public static final int CLICK_REFRESH_GU = 1;
-  public static final int CLICK_REFRESH_GC = 2;
-  private static final String KEY_CLICK_REFRESH = "clickRefreshMode";
-
-  public static int getClickRefreshMode(android.content.Context ctx) {
-    return ctx.getSharedPreferences(PREFS_FILE, android.content.Context.MODE_PRIVATE)
-        .getInt(KEY_CLICK_REFRESH, CLICK_REFRESH_OFF);
-  }
-
-  public static void setClickRefreshMode(android.content.Context ctx, int mode) {
-    ctx.getSharedPreferences(PREFS_FILE, android.content.Context.MODE_PRIVATE)
-        .edit().putInt(KEY_CLICK_REFRESH, mode).apply();
-  }
-
   // ---- 排序方式 ----
 
   public int getSortMode() {
