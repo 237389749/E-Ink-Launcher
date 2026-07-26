@@ -107,7 +107,6 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     rootView.findViewById(R.id.openDeviceManager).setOnClickListener(this);
     rootView.findViewById(R.id.toggleGestureNav).setOnClickListener(this);
     rootView.findViewById(R.id.refreshScreen).setOnClickListener(this);
-    rootView.findViewById(R.id.refreshMode).setOnClickListener(this);
     rootView.findViewById(R.id.clickRefresh).setOnClickListener(this);
 
     showStatusBar = rootView.findViewById(R.id.showStatusBar);
@@ -175,19 +174,6 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
       status = getString(R.string.click_refresh_off);
     }
     tv.setText(getString(R.string.setting_click_refresh, status));
-  }
-
-  private void showRefreshModeDialog() {
-    new AlertDialog.Builder(getActivity())
-        .setTitle(R.string.setting_refresh_mode)
-        .setItems(RefreshModeHelper.LABELS, new DialogInterface.OnClickListener() {
-          @Override
-          public void onClick(DialogInterface dialog, int which) {
-            RefreshModeHelper.apply(which);
-            getActivity().onBackPressed();
-          }
-        })
-        .show();
   }
 
   private void updateGestureNavLabel() {
@@ -325,8 +311,6 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     } else if (id == R.id.refreshScreen) {
       getActivity().sendBroadcast(new Intent("onyx.android.intent.action.REFRESH_SCREEN"));
       getActivity().onBackPressed();
-    } else if (id == R.id.refreshMode) {
-      showRefreshModeDialog();
     } else if (id == R.id.clickRefresh) {
       cycleClickRefresh();
     } else if (id == R.id.toggleGestureNav) {

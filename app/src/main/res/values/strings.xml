@@ -80,7 +80,6 @@
     <string name="setting_sort_mode">Sort</string>
     <string name="sort_need_usage_permission">Please grant usage access permission for this sort mode</string>
     <string name="setting_refresh_screen">Refresh Screen</string>
-    <string name="setting_refresh_mode">Global Refresh Mode</string>
     <string name="setting_click_refresh">Click Refresh: %s</string>
     <string name="as_refresh_description">Refresh screen on every click to keep E-Ink display responsive on slow panels.</string>
     <string name="click_refresh_off">OFF</string>

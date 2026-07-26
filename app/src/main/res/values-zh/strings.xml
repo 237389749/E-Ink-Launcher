@@ -77,7 +77,6 @@
     <string name="sort_need_usage_permission">此排序模式需要授予使用情况访问权限</string>
     <string name="setting_gesture_nav">手势导航</string>
     <string name="setting_refresh_screen">刷新屏幕</string>
-    <string name="setting_refresh_mode">全局刷新模式</string>
     <string name="setting_click_refresh">点击刷新: %s</string>
     <string name="as_refresh_description">每次点击触发屏幕刷新，持续刷新以保持墨水屏响应速度。</string>
     <string name="click_refresh_off">关</string>
