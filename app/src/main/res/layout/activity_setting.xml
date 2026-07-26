@@ -528,6 +528,19 @@
                 android:layout_height="1dp"
                 android:background="#000000" />
 
+            <TextView
+                android:id="@+id/toggleGestureNav"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:gravity="center_vertical"
+                android:paddingLeft="20dp"
+                android:textSize="@dimen/menu_item_text_size" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#000000" />
+
             <LinearLayout
                 android:id="@+id/changeFontSize"
                 android:layout_width="match_parent"

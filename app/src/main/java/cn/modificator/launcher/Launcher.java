@@ -296,6 +296,15 @@ public class Launcher extends Activity
   }
 
   @Override
+  public void onToggleGestureNav() {
+    if (GestureNavHelper.isGestureMode()) {
+      GestureNavHelper.switchToVirtualKey();
+    } else {
+      GestureNavHelper.switchToGesture();
+    }
+  }
+
+  @Override
   public void onSortModeChanged(int mode) {
     dataCenter.setSortMode(mode);
     dataCenter.refreshAppList(binder.isDelete());
