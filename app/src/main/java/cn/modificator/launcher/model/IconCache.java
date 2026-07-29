@@ -48,7 +48,7 @@ public class IconCache {
     if (!dirty) return false;
     customIconMap.clear();
 
-    if (hasExternalStorage && !showCustomIcon) {
+    if (hasExternalStorage && showCustomIcon) {
       File root = getIconDirectory();
       if (!root.exists()) {
         try {

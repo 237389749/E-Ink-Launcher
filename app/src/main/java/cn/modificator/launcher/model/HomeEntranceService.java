@@ -57,12 +57,8 @@ public class HomeEntranceService extends Service {
 
     @Override
     public void onDestroy() {
-        Intent thisService = new Intent(this,HomeEntranceService.class);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(thisService);
-        }else{
-            startService(thisService);
-        }
         super.onDestroy();
+        // 使用 START_STICKY 由系统自动重启，不再手动 startForegroundService
+        // （Android 12+ 禁止后台启动前台服务）
     }
 }

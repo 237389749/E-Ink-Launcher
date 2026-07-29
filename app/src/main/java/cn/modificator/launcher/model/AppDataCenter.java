@@ -67,6 +67,9 @@ public class AppDataCenter {
   public void setHideApps(Set<String> hideApps) {
     this.hideApps.clear();
     this.hideApps.addAll(hideApps);
+    if (binder != null) {
+      binder.setHideAppPkg(this.hideApps);
+    }
     loadApps();
   }
 

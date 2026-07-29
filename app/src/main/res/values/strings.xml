@@ -79,6 +79,4 @@
     <string name="app_show_name">App name</string>
     <string name="setting_sort_mode">Sort</string>
     <string name="sort_need_usage_permission">Please grant usage access permission for this sort mode</string>
-    <string name="setting_gesture_nav">Gesture Nav</string>
-    <string name="setting_virtual_key_nav">Virtual Keys</string>
 </resources>

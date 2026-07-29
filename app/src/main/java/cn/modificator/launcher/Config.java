@@ -107,7 +107,7 @@ public class Config {
     this.hideApps.clear();
     this.hideApps.addAll(hideApps);
     this.hideAppsLoaded = true;
-    prefs.edit().putStringSet(KEY_HIDE_APPS, this.hideApps).apply();
+    prefs.edit().putStringSet(KEY_HIDE_APPS, new HashSet<>(this.hideApps)).apply();
   }
 
   public Set<String> getHideApps() {

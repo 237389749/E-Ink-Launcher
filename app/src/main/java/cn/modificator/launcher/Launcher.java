@@ -137,9 +137,6 @@ public class Launcher extends Activity
   protected void onResume() {
     super.onResume();
     registerDynamicReceivers();
-    if (dataCenter != null) {
-      dataCenter.refreshAppList(binder.isDelete());
-    }
     refreshIcons();
   }
 
@@ -190,9 +187,9 @@ public class Launcher extends Activity
     // 初始化数据中心
     dataCenter = new AppDataCenter(this);
     dataCenter.setSortMode(config.getSortMode());
-    dataCenter.setHideApps(config.getHideApps());
-    dataCenter.setPageStatus(pageStatus);
     dataCenter.setAdapter(adapter);
+    dataCenter.setPageStatus(pageStatus);
+    dataCenter.setHideApps(config.getHideApps());
 
     // 一次性配置网格参数，避免多次重建
     launcherView.configure(config.getColNum(), config.getRowNum(), config.isHideDivider());
@@ -293,15 +290,6 @@ public class Launcher extends Activity
     binder.setDelete(true);
     dataCenter.refreshAppList(true);
     findViewById(R.id.deleteFinish).setVisibility(View.VISIBLE);
-  }
-
-  @Override
-  public void onToggleGestureNav() {
-    if (GestureNavHelper.isGestureMode()) {
-      GestureNavHelper.switchToVirtualKey();
-    } else {
-      GestureNavHelper.switchToGesture();
-    }
   }
 
   @Override
@@ -580,25 +568,10 @@ public class Launcher extends Activity
       dataCenter.showNextPage();
       return true;
     } else if (keyCode == KeyEvent.KEYCODE_BACK) {
+      // 作为 HOME 桌面，拦截返回键防止退出
       return true;
     }
     return super.onKeyUp(keyCode, event);
-  }
-
-  @Override
-  public boolean onKeyDown(int keyCode, KeyEvent event) {
-    if (keyCode == KeyEvent.KEYCODE_BACK && getFragmentManager().getBackStackEntryCount() == 0) {
-      return true;
-    }
-    return super.onKeyDown(keyCode, event);
-  }
-
-  @Override
-  public void onBackPressed() {
-    if (getFragmentManager().getBackStackEntryCount() > 0) {
-      super.onBackPressed();
-      config.setFontSize(config.getFontSize());
-    }
   }
 
   // =========================================================================
@@ -661,9 +634,9 @@ public class Launcher extends Activity
   public void applyStatusBarVisibility() {
     int flags = WindowManager.LayoutParams.FLAG_FULLSCREEN;
     if (config.isShowStatusBar()) {
-      getWindow().setFlags(flags, flags);
-    } else {
       getWindow().clearFlags(flags);
+    } else {
+      getWindow().setFlags(flags, flags);
     }
   }
 
