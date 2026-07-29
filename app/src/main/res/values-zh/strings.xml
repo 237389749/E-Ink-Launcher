@@ -69,6 +69,8 @@
     <string name="power_title" translatable="false">现在可以操作电源了哦~</string>
     <string name="battery_status_low_battery">电量低</string>
     <string name="show_custom_icon">显示自定义图标</string>
+    <string name="setting_gesture_nav">手势导航</string>
+    <string name="setting_virtual_key_nav">虚拟按键</string>
     <string name="show_statusbar">显示状态栏</string>
     <string name="show_wifi_name">显示WiFi名字</string>
     <string name="notification_click_back_launcher">点击这里回到桌面</string>

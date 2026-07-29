@@ -44,6 +44,7 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     void onShowCustomIconChanged(boolean show);
     void onSortModeChanged(int mode);
     void onEnterManageMode();
+    void onToggleGestureNav();
   }
 
   private OnSettingChangeListener listener;
@@ -102,6 +103,7 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     rootView.findViewById(R.id.helpAbout).setOnClickListener(this);
     rootView.findViewById(R.id.menu_ftp).setOnClickListener(this);
     rootView.findViewById(R.id.openDeviceManager).setOnClickListener(this);
+    rootView.findViewById(R.id.toggleGestureNav).setOnClickListener(this);
 
     showStatusBar = rootView.findViewById(R.id.showStatusBar);
     showCustomIcon = rootView.findViewById(R.id.showCustomIcon);
@@ -124,6 +126,16 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     hideDivider.setText(config.isHideDivider() ? "显示分隔线" : "隐藏分隔线");
     showCustomIcon.getPaint().setStrikeThruText(config.isShowCustomIcon());
     fontControl.setProgress((int) ((config.getFontSize() - 10) * 10));
+
+    updateGestureNavLabel();
+  }
+
+  private void updateGestureNavLabel() {
+    TextView tv = rootView.findViewById(R.id.toggleGestureNav);
+    boolean isGesture = GestureNavHelper.isGestureMode();
+    tv.setText(isGesture
+        ? getString(R.string.setting_gesture_nav) + " (ON)"
+        : getString(R.string.setting_virtual_key_nav) + " (OFF)");
   }
 
   private void initSpinners() {
@@ -250,6 +262,9 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     } else if (id == R.id.openDeviceManager) {
       startActivity(new Intent().setComponent(
           new ComponentName("com.android.settings", "com.android.settings.DeviceAdminSettings")));
+    } else if (id == R.id.toggleGestureNav) {
+      listener.onToggleGestureNav();
+      updateGestureNavLabel();
     }
   }
 

@@ -298,6 +298,15 @@ public class Launcher extends Activity
     dataCenter.refreshAppList(binder.isDelete());
   }
 
+  @Override
+  public void onToggleGestureNav() {
+    if (GestureNavHelper.isGestureMode()) {
+      GestureNavHelper.switchToVirtualKey();
+    } else {
+      GestureNavHelper.switchToGesture();
+    }
+  }
+
   // =========================================================================
   // 布局更新
   // =========================================================================
