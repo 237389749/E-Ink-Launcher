@@ -78,6 +78,80 @@
 
         <service android:name=".model.HomeEntranceService">
         </service>
+
+        <!-- 设置桥接：接收 Onyx 自定义 action，转发到原生设置 -->
+        <activity
+            android:name=".SettingsBridgeActivity"
+            android:theme="@style/Theme.Transparent"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity="">
+            <!-- 设置主页 -->
+            <intent-filter>
+                <action android:name="com.onyx.action.SETTING"/>
+                <action android:name="com.setting.action.CHILD_APP_MANAGEMENT"/>
+                <action android:name="com.setting.action.CHILD_LIBRARY_MANAGEMENT"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
+            <!-- 语言 / 日期 / 网络 / WiFi / 蓝牙 -->
+            <intent-filter>
+                <action android:name="onyx.settings.action.language"/>
+                <action android:name="onyx.settings.action.datetime"/>
+                <action android:name="onyx.settings.action.network"/>
+                <action android:name="onyx.settings.action.wifi"/>
+                <action android:name="onyx.settings.action.bluetooth"/>
+                <action android:name="android.intent.action.WIFI_ENABLE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
+            <!-- 声音 / 通知 / 电源 / 安全 -->
+            <intent-filter>
+                <action android:name="onyx.settings.action.SoundSettings"/>
+                <action android:name="onyx.settings.action.APP_NOTIFICATION_MANAGER"/>
+                <action android:name="onyx.settings.action.powermanager"/>
+                <action android:name="onyx.settings.action.SYSTEM_PASSWORD_SETTING"/>
+                <action android:name="onyx.settings.action.password_manager"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
+            <!-- 应用管理 / 反馈 / 辅助功能 -->
+            <intent-filter>
+                <action android:name="onyx.settings.action.app.management"/>
+                <action android:name="onyx.settings.action.feedback"/>
+                <action android:name="onyx.settings.action.SUBMIT_FEEDBACK"/>
+                <action android:name="onyx.settings.action.accessibility"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
+            <!-- 工作模式 / WLAN 共享 (SystemUI 磁贴) -->
+            <intent-filter>
+                <action android:name="com.android.systemui.CONFIGURE_WORK_PROFILE_ACTION"/>
+                <action android:name="com.android.systemui.CONFIGURE_TABLET_WORK_PROFILE_ACTION"/>
+                <action android:name="com.android.systemui.CONFIGURE_WLAN_NETWORK_SHARE_ACTION"/>
+                <action android:name="com.android.systemui.CONFIGURE_TABLET_WLAN_NETWORK_SHARE_ACTION"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
+            <!-- OTA / 固件 / 屏保 / 关机画面 / 刷新模式 -->
+            <intent-filter>
+                <action android:name="onyx.settings.action.firmware"/>
+                <action android:name="onyx.settings.action.ACTIVE_PEN_FIRMWARE"/>
+                <action android:name="onyx.settings.action.SHUTDOWN_IMAGE_SETTING"/>
+                <action android:name="onyx.settings.action.DREAM_STYLE_SETTING"/>
+                <action android:name="onyx.settings.action.OTHER_DREAM_SETTING_GUIDE"/>
+                <action android:name="com.onyx.reader.settings.action.REFRESH_HELP"/>
+                <action android:name="com.onyx.reader.settings.action.REFRESH_SETTINGS"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
+            <!-- 其他 Onyx 独有功能 -->
+            <intent-filter>
+                <action android:name="onyx.settings.action.QUICK_LAUNCHER"/>
+                <action android:name="onyx.settings.action.MAIL_SETTING"/>
+                <action android:name="onyx.settings.action.CUSTOM_SIDE_KEY"/>
+                <action android:name="onyx.settings.action.SCROLL_BUTTON_SETTING"/>
+                <action android:name="onyx.settings.action.STATISTICS"/>
+                <action android:name="onyx.settings.action.MY_ANNOTATION"/>
+                <action android:name="onyx.settings.action.library"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
+        </activity>
     </application>
 
 </manifest>
