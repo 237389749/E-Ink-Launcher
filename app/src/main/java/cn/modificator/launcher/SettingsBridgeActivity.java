@@ -52,7 +52,7 @@ public class SettingsBridgeActivity extends Activity {
 
             // ── 通知管理 ──────────────────────────────────────────
             case "onyx.settings.action.APP_NOTIFICATION_MANAGER":
-                target = new Intent(Settings.ACTION_NOTIFICATION_SETTINGS);
+                target = new Intent("android.settings.NOTIFICATION_SETTINGS");
                 break;
 
             // ── 电池/电源管理 ──────────────────────────────────────
@@ -122,7 +122,7 @@ public class SettingsBridgeActivity extends Activity {
             // ── OTA / 固件升级 ────────────────────────────────────
             case "onyx.settings.action.firmware":
             case "onyx.settings.action.ACTIVE_PEN_FIRMWARE":
-                target = new Intent(Settings.ACTION_SYSTEM_UPDATE_SETTINGS);
+                target = new Intent("android.settings.SYSTEM_UPDATE_SETTINGS");
                 break;
 
             // ── 辅助功能 ──────────────────────────────────────────
