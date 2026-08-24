@@ -38,15 +38,17 @@ public class RefreshModeHelper {
   private static final int UI_GU_MODE = 2;
   private static final int UI_DEEP_GC_MODE = 108;
   private static final int UI_X_A2_MODE = 16777220;
+  private static final int UI_MONO_A2_MODE = 33554436;
   /** None 用 -1 表示清除 scope */
   private static final int UI_NONE = -1;
 
-  /** 精简模式集（高频 3 效果维度 + 恢复默认；None 后系统引擎自身还提供多种模式） */
+  /** 精简模式集（高频 4 效果维度 + 恢复默认；None 后系统引擎自身还提供多种模式） */
   public static final String[] MODE_NAMES = {
       "None",
       "GU",
       "DEEP_GC",
       "ANIMATION_X",
+      "ANIMATION_MONO",
   };
 
   public static final String[] LABELS = {
@@ -54,10 +56,11 @@ public class RefreshModeHelper {
       "GU — 无闪烁，16 级灰度（日常）",
       "DEEP GC — 深度全刷（最清晰）",
       "ANIM X — 极速响应（最快）",
+      "ANIM MONO — 纯黑白滑动",
   };
 
   private static final int[] MODE_VALUES = {
-      UI_NONE, UI_GU_MODE, UI_DEEP_GC_MODE, UI_X_A2_MODE,
+      UI_NONE, UI_GU_MODE, UI_DEEP_GC_MODE, UI_X_A2_MODE, UI_MONO_A2_MODE,
   };
 
   private static final String VIEW_UPDATE_HELPER = "android.onyx.ViewUpdateHelper";
