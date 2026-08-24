@@ -187,8 +187,8 @@ public class Launcher extends Activity
     // 初始化数据中心
     dataCenter = new AppDataCenter(this);
     dataCenter.setSortMode(config.getSortMode());
-    dataCenter.setAdapter(adapter);
     dataCenter.setPageStatus(pageStatus);
+    dataCenter.setAdapter(adapter);
     dataCenter.setHideApps(config.getHideApps());
 
     // 一次性配置网格参数，避免多次重建
