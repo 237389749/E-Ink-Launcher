@@ -27,6 +27,7 @@ import java.util.Map;
 public class CrashCapture implements Thread.UncaughtExceptionHandler {
 
   private static final String TAG = "CrashCapture";
+  private static final String FALLBACK_PACKAGE = "com.onyx";
   private static final CrashCapture INSTANCE = new CrashCapture();
   private static final SimpleDateFormat DATE_FORMAT =
       new SimpleDateFormat("yyyy-MM-dd-HH-mm-ss", Locale.getDefault());
@@ -78,8 +79,31 @@ public class CrashCapture implements Thread.UncaughtExceptionHandler {
     }
     appContext.startActivity(crashIntent);
 
+    // 兜底：崩溃后自动启动文石默认桌面（com.onyx），避免用户面对黑屏。
+    // 仅在 com.onyx 包存在时尝试；被冻结或不存在时静默跳过。
+    startFallbackLauncher();
+
     android.os.Process.killProcess(android.os.Process.myPid());
     System.exit(10);
+  }
+
+  /**
+   * 启动文石默认桌面作为兜底（面向文石设备）。包不存在或被冻结时静默失败。
+   */
+  private void startFallbackLauncher() {
+    try {
+      PackageManager pm = appContext.getPackageManager();
+      pm.getPackageInfo(FALLBACK_PACKAGE, 0);
+      Intent intent = new Intent(Intent.ACTION_MAIN);
+      intent.addCategory(Intent.CATEGORY_HOME);
+      intent.setPackage(FALLBACK_PACKAGE);
+      intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+      appContext.startActivity(intent);
+    } catch (PackageManager.NameNotFoundException e) {
+      Log.i(TAG, "Fallback launcher not found: " + FALLBACK_PACKAGE);
+    } catch (Exception e) {
+      Log.w(TAG, "Failed to start fallback launcher: " + e);
+    }
   }
 
   private boolean handleException(Throwable ex) {

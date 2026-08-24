@@ -3,6 +3,7 @@ package cn.modificator.launcher;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.admin.DevicePolicyManager;
+import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
@@ -335,7 +336,12 @@ public class Launcher extends Activity
       intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
       intent.addCategory(Intent.CATEGORY_LAUNCHER);
       intent.setComponent(comp);
-      startActivity(intent);
+      try {
+        startActivity(intent);
+      } catch (ActivityNotFoundException | SecurityException e) {
+        // 应用被冻结/卸载后图标仍残留时，避免崩溃
+        e.printStackTrace();
+      }
     }
   }
 
