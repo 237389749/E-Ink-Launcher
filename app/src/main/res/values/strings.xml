@@ -41,6 +41,7 @@
     <string name="dialog_cancel">Cancel</string>
     <string name="dialog_hide">Hide</string>
     <string name="dialog_uninstall">Uninstall</string>
+    <string name="dialog_refresh_mode">Refresh Mode</string>
     <string name="dialog_pkg_name">Package Name: %s</string>
     <string name="dialog_close">Close</string>
 

@@ -15,11 +15,11 @@ import java.util.Locale;
 /**
  * 墨水屏刷新模式切换（launcher app scope）。
  *
- * 模式集覆盖速度↔质量完整谱系（14 项，全部有精确 UI 模式值，ref.md 映射表）：
- *   速度组：GU_FAST/DU(1)、A2_QUALITY(2308)、ANIMATION_X(16777220)、ANIMATION_MONO(33554436)
- *   质量组：GC(98)、GCC(107)、DEEP_GC(108)、GC4(3)、DU4(2312)、DU_QUALITY(2305)
- *   无闪烁：GU(2)；低残影：REGAL(6)、REGAL_PLUS(9)
- *   None    — 清除 scope，回归系统 per-app 模式管理
+ * 精简模式集（4 项，覆盖高频需求 + 恢复默认）：
+ *   None       — 清除 scope，回归系统 per-app 模式管理（系统引擎自身还提供多种模式）
+ *   GU(2)      — 无闪烁，16 级灰度（日常）
+ *   DEEP_GC(108) — 深度全刷（最清晰）
+ *   ANIMATION_X(16777220) — 极速响应（最快）
  *
  * 实现：反射调用 framework 私有类 {@code android.onyx.ViewUpdateHelper}（Onyx 定制 ROM
  * 已将其编入 boot classpath，第三方应用可加载）。对 launcher 自身设置 app scope 波形，
@@ -35,61 +35,29 @@ import java.util.Locale;
 public class RefreshModeHelper {
 
   /** ViewUpdateHelper UI 模式值（ref.md：SDMDevice 映射表） */
-  private static final int UI_GU_FAST_DU = 1;          // DU / GU_FAST
   private static final int UI_GU_MODE = 2;
-  private static final int UI_GC4_MODE = 3;
-  private static final int UI_REGAL_MODE = 6;
-  private static final int UI_REGAL_PLUS_MODE = 9;
-  private static final int UI_GC_MODE = 98;
-  private static final int UI_GCC_MODE = 107;
   private static final int UI_DEEP_GC_MODE = 108;
-  private static final int UI_DU_QUALITY_MODE = 2305;
-  private static final int UI_A2_QUALITY_MODE = 2308;
-  private static final int UI_DU4_MODE = 2312;
   private static final int UI_X_A2_MODE = 16777220;
-  private static final int UI_MONO_A2_MODE = 33554436;
   /** None 用 -1 表示清除 scope */
   private static final int UI_NONE = -1;
 
-  /** 模式名 → UI 模式值；None 清除 scope 回归系统。覆盖速度↔质量完整谱系。 */
+  /** 精简模式集（高频 3 效果维度 + 恢复默认；None 后系统引擎自身还提供多种模式） */
   public static final String[] MODE_NAMES = {
       "None",
       "GU",
-      "GC4",
-      "REGAL",
-      "REGAL_PLUS",
-      "GC",
-      "GCC",
       "DEEP_GC",
-      "GU_FAST",
-      "DU_QUALITY",
-      "A2_QUALITY",
-      "DU4",
       "ANIMATION_X",
-      "ANIMATION_MONO",
   };
 
   public static final String[] LABELS = {
       "恢复默认（系统 per-app 模式）",
       "GU — 无闪烁，16 级灰度（日常）",
-      "GC4 — 4 级全刷",
-      "REGAL — 低残影",
-      "REGAL PLUS — 最高质量低残影",
-      "GC — 标准全刷（清残影）",
-      "GCC — 压缩全刷",
       "DEEP GC — 深度全刷（最清晰）",
-      "GU FAST / DU — 快速 2 级",
-      "DU QUALITY — DU 质量",
-      "A2 QUALITY — 动画质量",
-      "DU4 — 4 级 DU",
       "ANIM X — 极速响应（最快）",
-      "ANIM MONO — 纯黑白滑动",
   };
 
   private static final int[] MODE_VALUES = {
-      UI_NONE, UI_GU_MODE, UI_GC4_MODE, UI_REGAL_MODE, UI_REGAL_PLUS_MODE,
-      UI_GC_MODE, UI_GCC_MODE, UI_DEEP_GC_MODE, UI_GU_FAST_DU, UI_DU_QUALITY_MODE,
-      UI_A2_QUALITY_MODE, UI_DU4_MODE, UI_X_A2_MODE, UI_MONO_A2_MODE,
+      UI_NONE, UI_GU_MODE, UI_DEEP_GC_MODE, UI_X_A2_MODE,
   };
 
   private static final String VIEW_UPDATE_HELPER = "android.onyx.ViewUpdateHelper";
@@ -134,6 +102,12 @@ public class RefreshModeHelper {
       log("init: ViewUpdateHelper FAILED: " + t);
       return false;
     }
+  }
+
+  /** 返回指定 index 的 UI 模式值（供 per-app 配置 JSON 使用）；越界返回 -1 */
+  public static int getModeValue(int index) {
+    if (index < 0 || index >= MODE_VALUES.length) return -1;
+    return MODE_VALUES[index];
   }
 
   /** 应用全局刷新模式（index 对应 MODE_NAMES），成功返回 true */

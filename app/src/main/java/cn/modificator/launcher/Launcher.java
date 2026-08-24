@@ -27,6 +27,7 @@ import android.view.View;
 import android.view.WindowManager;
 import android.widget.ImageView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
@@ -419,26 +420,91 @@ public class Launcher extends Activity
         .setIcon(iconCache.getIcon(packageName, info, getPackageManager()))
         .setTitle(iconCache.getLabel(packageName, info, getPackageManager()))
         .setMessage(getString(R.string.dialog_pkg_name, packageName))
-        .setPositiveButton(R.string.dialog_cancel, null)
-        .setNeutralButton(R.string.dialog_hide, new DialogInterface.OnClickListener() {
+        .setItems(new String[]{
+            getString(R.string.dialog_hide),
+            getString(R.string.dialog_uninstall),
+            getString(R.string.dialog_refresh_mode),
+        }, new DialogInterface.OnClickListener() {
           @Override
           public void onClick(DialogInterface dialog, int which) {
-            Set<String> hideApps = binder.getHideAppPkg();
-            if (!hideApps.add(packageName)) {
-              hideApps.remove(packageName);
+            if (which == 0) {
+              Set<String> hideApps = binder.getHideAppPkg();
+              if (!hideApps.add(packageName)) {
+                hideApps.remove(packageName);
+              }
+              dataCenter.refreshAppList();
+            } else if (which == 1) {
+              Intent deleteIntent = new Intent(Intent.ACTION_DELETE,
+                  Uri.parse("package:" + packageName));
+              startActivity(deleteIntent);
+            } else {
+              showPerAppRefreshModeDialog(packageName);
             }
-            dataCenter.refreshAppList();
-          }
-        })
-        .setNegativeButton(R.string.dialog_uninstall, new DialogInterface.OnClickListener() {
-          @Override
-          public void onClick(DialogInterface dialog, int which) {
-            Intent deleteIntent = new Intent(Intent.ACTION_DELETE,
-                Uri.parse("package:" + packageName));
-            startActivity(deleteIntent);
           }
         })
         .show();
+  }
+
+  /** 长按菜单：为该应用配置系统 per-app 刷新模式（写入系统 EACAppTheme，与通知栏 EInk Center 同源） */
+  private void showPerAppRefreshModeDialog(final String packageName) {
+    new AlertDialog.Builder(this)
+        .setTitle(getString(R.string.dialog_refresh_mode) + " — " + packageName)
+        .setItems(RefreshModeHelper.LABELS, new DialogInterface.OnClickListener() {
+          @Override
+          public void onClick(DialogInterface dialog, int which) {
+            boolean ok = applyPerAppRefreshMode(packageName, which);
+            Toast.makeText(Launcher.this,
+                ok ? "刷新模式已应用（root）" : "配置失败（root 授权或系统服务不可用）",
+                Toast.LENGTH_SHORT).show();
+          }
+        })
+        .show();
+  }
+
+  /** 构造 EACAppTheme JSON（fastjson 反序列化所需字段，fastjson 缺失字段用构造器默认） */
+  private String buildPerAppThemeJson(String pkg, int modeValue) {
+    try {
+      org.json.JSONObject refresh = new org.json.JSONObject();
+      refresh.put("updateMode", modeValue);
+      refresh.put("enable", true);
+      refresh.put("gcInterval", 20);
+      org.json.JSONObject gac = new org.json.JSONObject();
+      gac.put("refreshConfig", refresh);
+      org.json.JSONObject appConfig = new org.json.JSONObject();
+      appConfig.put("pkgName", pkg);
+      appConfig.put("enable", true);
+      appConfig.put("globalActivityConfig", gac);
+      org.json.JSONObject theme = new org.json.JSONObject();
+      theme.put("pkg", pkg);
+      theme.put("name", pkg);
+      theme.put("alias", "refresh");
+      theme.put("themeType", 3);
+      theme.put("changed", true);
+      theme.put("appConfig", appConfig);
+      return theme.toString();
+    } catch (Exception e) {
+      return null;
+    }
+  }
+
+  /** 经 su + app_process 以 root 身份调 EInkHelper.applyEACAppTheme 写入系统 per-app 配置 */
+  private boolean applyPerAppRefreshMode(String pkg, int modeIndex) {
+    int modeValue = RefreshModeHelper.getModeValue(modeIndex);
+    if (modeValue < 0) return false;
+    String json = buildPerAppThemeJson(pkg, modeValue);
+    if (json == null) return false;
+    String b64 = android.util.Base64.encodeToString(json.getBytes(),
+        android.util.Base64.NO_WRAP);
+    String cmd = "CLASSPATH=" + getApplicationInfo().sourceDir
+        + " app_process /system/bin cn.modificator.launcher.PerAppRefreshHelper "
+        + pkg + " " + b64;
+    try {
+      Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
+      int code = p.waitFor();
+      return code == 0;
+    } catch (Exception e) {
+      return false;
+    }
   }
 
   // =========================================================================
