@@ -174,6 +174,7 @@ public class Launcher extends Activity
 
     // 配置 Binder、Adapter、View
     iconCache = new IconCache();
+    iconCache.setDiskCacheDir(getCacheDir());
     binder = new AppItemBinder(getPackageManager());
     binder.setCallback(this);
     binder.setIconCache(iconCache);

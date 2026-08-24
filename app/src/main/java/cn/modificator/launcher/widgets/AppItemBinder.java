@@ -5,6 +5,8 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
 import android.widget.ImageView;
 
@@ -13,6 +15,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import cn.modificator.launcher.R;
 import cn.modificator.launcher.model.AppDataCenter;
@@ -53,6 +57,10 @@ public class AppItemBinder {
 
   private final PackageManager packageManager;
   private final Set<String> hideAppPkg = new HashSet<>();
+
+  // 图标/标签异步加载线程池（避免主线程逐个解析图标导致刷新卡顿）
+  private static final ExecutorService ICON_EXECUTOR = Executors.newFixedThreadPool(3);
+  private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
 
   private Callback callback;
   private IconCache iconCache;
@@ -177,10 +185,14 @@ public class AppItemBinder {
       loadIcon(holder.appImage, pkg, R.drawable.ic_onekeylock, customIcons);
       holder.appName.setText(R.string.item_lockscreen);
     } else {
-      loadIcon(holder.appImage, pkg, info, customIcons);
-      holder.appName.setText(iconCache != null
-          ? iconCache.getLabel(pkg, info, packageManager)
-          : info.loadLabel(packageManager));
+      // 内存缓存命中直接同步显示；未命中先留空，后台加载完成后回填（不阻塞主线程）
+      Drawable cachedIcon = iconCache != null ? iconCache.getCachedIcon(pkg) : null;
+      holder.appImage.setImageDrawable(cachedIcon);
+      CharSequence cachedLabel = iconCache != null ? iconCache.getCachedLabel(pkg) : null;
+      holder.appName.setText(cachedLabel != null ? cachedLabel : "");
+      if (cachedIcon == null || cachedLabel == null) {
+        loadIconAsync(holder, position, pkg, info);
+      }
     }
 
     // —— 监听器（通过 tag 传递 position，复用单例监听器） ——
@@ -220,17 +232,40 @@ public class AppItemBinder {
     }
   }
 
-  private void loadIcon(ImageView iv, String pkg, ResolveInfo info,
-                         Map<String, File> customIcons) {
-    File custom = customIcons != null ? customIcons.get(pkg) : null;
-    if (custom != null) {
-      iv.setImageURI(Uri.fromFile(custom));
-    } else {
-      Drawable icon = iconCache != null
-          ? iconCache.getIcon(pkg, info, packageManager)
-          : info.loadIcon(packageManager);
-      iv.setImageDrawable(icon);
-    }
+  /**
+   * 后台加载图标与标签（内存 → 磁盘 → PackageManager），完成后在主线程回填。
+   * 回填前校验 holder 仍对应当前位置与应用，避免复用错位。
+   */
+  private void loadIconAsync(final LauncherAdapter.ItemViewHolder holder, final int position,
+                             final String pkg, final ResolveInfo info) {
+    ICON_EXECUTOR.execute(new Runnable() {
+      @Override
+      public void run() {
+        final Drawable icon = iconCache != null
+            ? iconCache.getIcon(pkg, info, packageManager)
+            : info.loadIcon(packageManager);
+        final CharSequence label = iconCache != null
+            ? iconCache.getLabel(pkg, info, packageManager)
+            : info.loadLabel(packageManager);
+        MAIN_HANDLER.post(new Runnable() {
+          @Override
+          public void run() {
+            if (!isHolderCurrent(holder, position, pkg)) return;
+            if (icon != null) holder.appImage.setImageDrawable(icon);
+            if (label != null) holder.appName.setText(label);
+          }
+        });
+      }
+    });
+  }
+
+  /** 校验 holder 仍绑定到同一位置且数据未被替换/清空 */
+  private boolean isHolderCurrent(LauncherAdapter.ItemViewHolder holder, int position, String pkg) {
+    Object tag = holder.itemView.getTag();
+    if (!(tag instanceof Integer) || (Integer) tag != position) return false;
+    if (dataRef == null || position >= dataRef.size()) return false;
+    ResolveInfo info = dataRef.get(position);
+    return info != null && pkg.equals(info.activityInfo.packageName);
   }
 
   // =========================================================================
