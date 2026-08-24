@@ -505,11 +505,12 @@ public class Launcher extends Activity
 
   /** 注册生命周期不变的静态广播 */
   private void registerStaticReceivers() {
-    // 应用安装/卸载广播
+    // 应用安装/卸载/冻结（启用状态变化）广播
     IntentFilter appChangeFilter = new IntentFilter();
     appChangeFilter.addAction(Intent.ACTION_PACKAGE_ADDED);
     appChangeFilter.addAction(Intent.ACTION_PACKAGE_REMOVED);
     appChangeFilter.addAction(Intent.ACTION_PACKAGE_REPLACED);
+    appChangeFilter.addAction(Intent.ACTION_PACKAGE_CHANGED);
     appChangeFilter.addDataScheme("package");
     registerCompatReceiver(appChangeReceiver, appChangeFilter);
   }
