@@ -23,6 +23,7 @@ public class Config {
   public static final String KEY_SHOW_STATUS_BAR = "launcherShowStatusBar";
   public static final String KEY_SHOW_CUSTOM_ICON = "launcherShowCustomIcon";
   public static final String KEY_SORT_MODE = "launcherSortMode";
+  public static final String KEY_REFRESH_MODE = "launcherRefreshMode";
 
   // ---- 默认值 ----
   private static final int DEFAULT_COL_NUM = 5;
@@ -193,5 +194,16 @@ public class Config {
     if (this.sortMode == mode) return;
     this.sortMode = mode;
     prefs.edit().putInt(KEY_SORT_MODE, mode).apply();
+  }
+
+  // ---- 全局刷新模式 ----
+
+  /** 返回上次设置的全局刷新模式 index（-1 表示未设置过） */
+  public int getRefreshMode() {
+    return prefs.getInt(KEY_REFRESH_MODE, -1);
+  }
+
+  public void setRefreshMode(int index) {
+    prefs.edit().putInt(KEY_REFRESH_MODE, index).apply();
   }
 }

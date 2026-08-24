@@ -2,10 +2,12 @@ package cn.modificator.launcher;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.Fragment;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.net.ConnectivityManager;
@@ -104,6 +106,10 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     rootView.findViewById(R.id.menu_ftp).setOnClickListener(this);
     rootView.findViewById(R.id.openDeviceManager).setOnClickListener(this);
     rootView.findViewById(R.id.toggleGestureNav).setOnClickListener(this);
+    rootView.findViewById(R.id.refreshMode).setOnClickListener(this);
+    if (!RefreshModeHelper.isAvailable()) {
+      rootView.findViewById(R.id.refreshMode).setVisibility(View.GONE);
+    }
 
     showStatusBar = rootView.findViewById(R.id.showStatusBar);
     showCustomIcon = rootView.findViewById(R.id.showCustomIcon);
@@ -136,6 +142,26 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     tv.setText(isGesture
         ? getString(R.string.setting_gesture_nav) + " (ON)"
         : getString(R.string.setting_virtual_key_nav) + " (OFF)");
+  }
+
+  /** 全局刷新模式选择弹窗（模式集与系统引擎 4 模式互补） */
+  private void showRefreshModeDialog() {
+    if (!RefreshModeHelper.isAvailable()) {
+      Toast.makeText(getActivity(), "此设备不支持 EPD 模式切换", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    new AlertDialog.Builder(getActivity())
+        .setTitle(R.string.setting_refresh_mode)
+        .setItems(RefreshModeHelper.LABELS, new DialogInterface.OnClickListener() {
+          @Override
+          public void onClick(DialogInterface dialog, int which) {
+            if (RefreshModeHelper.apply(which)) {
+              config.setRefreshMode(which);
+            }
+            getActivity().onBackPressed();
+          }
+        })
+        .show();
   }
 
   private void initSpinners() {
@@ -265,6 +291,8 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     } else if (id == R.id.toggleGestureNav) {
       listener.onToggleGestureNav();
       updateGestureNavLabel();
+    } else if (id == R.id.refreshMode) {
+      showRefreshModeDialog();
     }
   }
 

@@ -132,6 +132,12 @@ public class Launcher extends Activity
     initViews();
     registerStaticReceivers();
     checkLaunchHomeNotification();
+
+    // 恢复上次设置的全局刷新模式（若 Onyx SDK 可用）
+    int refreshMode = config.getRefreshMode();
+    if (refreshMode >= 0 && RefreshModeHelper.isAvailable()) {
+      RefreshModeHelper.apply(refreshMode);
+    }
   }
 
   @Override
