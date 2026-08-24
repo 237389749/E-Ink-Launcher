@@ -74,7 +74,6 @@ public class RefreshModeHelper {
   };
 
   private static final String VIEW_UPDATE_HELPER = "android.onyx.ViewUpdateHelper";
-  private static final String APP_PACKAGE = "cn.modificator.launcher";
   private static final String LOG_FILE = "refresh_mode.log";
 
   private static Context appContext;
@@ -147,10 +146,11 @@ public class RefreshModeHelper {
         viewUpdateHelperClass.getMethod("clearAppScopeUpdate", boolean.class).invoke(null, true);
         viewUpdateHelperClass.getMethod("repaintEverything").invoke(null);
       } else {
-        log("apply: appScope value=" + value);
+        log("apply: globalScope value=" + value);
+        // 全局 scope（null 包名 = SurfaceFlinger 所有窗口，含第三方应用），再立即全屏刷新
         viewUpdateHelperClass
             .getMethod("applyAppScopeUpdate", String.class, boolean.class, int.class, int.class, int.class)
-            .invoke(null, APP_PACKAGE, true, 0, value, Integer.MAX_VALUE);
+            .invoke(null, null, true, 0, value, Integer.MAX_VALUE);
         viewUpdateHelperClass.getMethod("repaintEverything", int.class).invoke(null, value);
       }
       return true;
