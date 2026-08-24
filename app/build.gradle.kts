@@ -54,4 +54,5 @@ dependencies {
     implementation("androidx.core:core:1.12.0")
     implementation("org.apache.ftpserver:ftplet-api:1.2.1")
     implementation("org.apache.ftpserver:ftpserver-core:1.2.1")
+    implementation("org.lsposed.hiddenapibypass:hiddenapibypass:6.1")
 }
