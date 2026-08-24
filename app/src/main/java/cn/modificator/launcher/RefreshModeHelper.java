@@ -36,17 +36,23 @@ public class RefreshModeHelper {
 
   /** ViewUpdateHelper UI 模式值（ref.md：SDMDevice 映射表） */
   private static final int UI_GU_MODE = 2;
+  private static final int UI_REGAL_MODE = 6;
+  private static final int UI_GC_MODE = 98;
+  private static final int UI_GCC_MODE = 107;
   private static final int UI_DEEP_GC_MODE = 108;
   private static final int UI_X_A2_MODE = 16777220;
   private static final int UI_MONO_A2_MODE = 33554436;
   /** None 用 -1 表示清除 scope */
   private static final int UI_NONE = -1;
 
-  /** 精简模式集（高频 4 效果维度 + 恢复默认；None 后系统引擎自身还提供多种模式） */
+  /** 可选模式集（实测耗时：REGAL 4ms/GC 1ms/GCC 3ms/ANIM_X 5ms/ANIM_MONO 3ms 为快组） */
   public static final String[] MODE_NAMES = {
       "None",
       "GU",
       "DEEP_GC",
+      "REGAL",
+      "GC",
+      "GCC",
       "ANIMATION_X",
       "ANIMATION_MONO",
   };
@@ -55,12 +61,16 @@ public class RefreshModeHelper {
       "恢复默认（系统 per-app 模式）",
       "GU — 无闪烁，16 级灰度（日常）",
       "DEEP GC — 深度全刷（最清晰）",
+      "REGAL — 低残影（快）",
+      "GC — 标准全刷（快）",
+      "GCC — 压缩全刷（快）",
       "ANIM X — 极速响应（最快）",
       "ANIM MONO — 纯黑白滑动",
   };
 
   private static final int[] MODE_VALUES = {
-      UI_NONE, UI_GU_MODE, UI_DEEP_GC_MODE, UI_X_A2_MODE, UI_MONO_A2_MODE,
+      UI_NONE, UI_GU_MODE, UI_DEEP_GC_MODE, UI_REGAL_MODE, UI_GC_MODE,
+      UI_GCC_MODE, UI_X_A2_MODE, UI_MONO_A2_MODE,
   };
 
   private static final String VIEW_UPDATE_HELPER = "android.onyx.ViewUpdateHelper";
