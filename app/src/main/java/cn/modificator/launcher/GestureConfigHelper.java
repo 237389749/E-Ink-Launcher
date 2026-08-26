@@ -16,18 +16,21 @@ import java.util.Map;
  * STATUS_BAR_SERVICE 权限，第三方不可用）；本类用 root 直接写文件 + 重启 systemui 生效，
  * 无 com.onyx 时配置持久。
  *
- * 动作集不含侧滑音量/亮度（slideEnable=false，不写 slide_gestures_*）。
+ * 覆盖 Onyx 手势设置的全部 17 个手势位置（底部/左侧/右侧/顶部/三指/侧滑）；
+ * 动作集只保留不依赖 Onyx 特有环境的通用动作（无前光/对比度/优化引擎/翻页/笔记等）。
  */
 public class GestureConfigHelper {
 
   private static final String GESTURES_CONFIG = "/data/data/com.android.systemui/gestures_config";
 
-  /** 手势位置（对应 gestures_config guestConfigMap 的 key） */
+  /** 全部手势位置（gestures_config guestConfigMap 的 key，17 个） */
   public static final String[] POSITIONS = {
       "gestures_bottom_middle", "gestures_bottom_left", "gestures_bottom_right",
       "gestures_left_top", "gestures_left_middle", "gestures_left_bottom",
       "gestures_right_top", "gestures_right_middle", "gestures_right_bottom",
-      "gestures_tree_point_down",
+      "gestures_top_left", "gestures_top_middle", "gestures_top_right",
+      "gestures_tree_point_down", "gestures_tree_point_up",
+      "slide_gestures_left", "slide_gestures_right",
   };
 
   /** 手势位置显示名 */
@@ -35,14 +38,24 @@ public class GestureConfigHelper {
       "底部上滑", "底部左缘上滑", "底部右缘上滑",
       "左侧上部", "左侧中部", "左侧下部",
       "右侧上部", "右侧中部", "右侧下部",
-      "三指下滑",
+      "顶部左滑", "顶部上滑", "顶部右滑",
+      "三指下滑", "三指上滑",
+      "左侧滑条", "右侧滑条",
   };
 
-  /** 动作集（无侧滑音量/亮度） */
-  public static final String[] ACTIONS = {"NONE", "HOME", "BACK", "TASK_SWITCH", "SCREENSHOTS", "EINK_CENTER"};
-  public static final String[] ACTION_LABELS = {"无", "回到桌面", "返回", "任务切换", "截屏", "优化引擎"};
+  /** 通用动作集（不依赖 Onyx 特有环境；去掉前光/对比度/优化引擎/翻页/笔记等） */
+  public static final String[] ACTIONS = {
+      "NONE", "HOME", "BACK", "TASK_SWITCH", "SCREENSHOTS",
+      "PARTIAL_SCREENSHOTS", "LONG_SCREENSHOTS", "FULLSCREEN",
+      "VOLUME", "MEDIA_PLAY", "MEDIA_PLAY_PAUSE",
+  };
+  public static final String[] ACTION_LABELS = {
+      "无", "回到桌面", "返回", "任务切换", "截屏",
+      "区域截屏", "长截屏", "全屏",
+      "音量", "媒体播放", "播放/暂停",
+  };
 
-  /** Poke6 验证过的默认映射 */
+  /** 默认映射（Poke6 验证：底部上滑=任务切换、两侧=返回、三指下=截屏；侧滑条默认无） */
   private static Map<String, String> defaultMap() {
     Map<String, String> m = new LinkedHashMap<>();
     m.put("gestures_bottom_middle", "HOME");
@@ -54,7 +67,13 @@ public class GestureConfigHelper {
     m.put("gestures_right_top", "BACK");
     m.put("gestures_right_middle", "BACK");
     m.put("gestures_right_bottom", "BACK");
+    m.put("gestures_top_left", "NONE");
+    m.put("gestures_top_middle", "NONE");
+    m.put("gestures_top_right", "NONE");
     m.put("gestures_tree_point_down", "SCREENSHOTS");
+    m.put("gestures_tree_point_up", "NONE");
+    m.put("slide_gestures_left", "NONE");
+    m.put("slide_gestures_right", "NONE");
     return m;
   }
 
@@ -74,8 +93,7 @@ public class GestureConfigHelper {
     json.append("\"guestConfigMap\":{");
     Map<String, String> full = defaultMap();
     for (String p : POSITIONS) {
-      String v = map.containsKey(p) ? map.get(p) : "NONE";
-      if (full.containsKey(p)) full.put(p, v);
+      if (map.containsKey(p)) full.put(p, map.get(p));
     }
     boolean first = true;
     for (Map.Entry<String, String> e : full.entrySet()) {
