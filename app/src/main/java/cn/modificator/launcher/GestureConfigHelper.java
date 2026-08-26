@@ -43,16 +43,22 @@ public class GestureConfigHelper {
       "左侧滑条", "右侧滑条",
   };
 
-  /** 通用动作集（不依赖 Onyx 特有环境；去掉前光/对比度/优化引擎/翻页/笔记等） */
+  /** 动作集 = 系统级 + Onyx ROM 层（EventHandler dispatchEvent case 1-32 + VOLUME），
+   *  排除依赖 com.onyx app 的（AI 助手/手写笔记/笔类型/自由标注）与亮度风格广播。 */
   public static final String[] ACTIONS = {
-      "NONE", "HOME", "BACK", "TASK_SWITCH", "SCREENSHOTS",
-      "PARTIAL_SCREENSHOTS", "LONG_SCREENSHOTS", "FULLSCREEN",
-      "VOLUME", "MEDIA_PLAY", "MEDIA_PLAY_PAUSE",
+      "NONE", "HOME", "BACK", "TASK_SWITCH", "SCREENSHOTS", "PARTIAL_SCREENSHOTS",
+      "CLEAN_CACHE", "REFRESH_SCREEN", "STANDBY", "PREV_PAGE", "NEXT_PAGE",
+      "PREV_CHAPTER", "NEXT_CHAPTER", "EINK_CENTER", "TOGGLE_CTM_BRIGHTNESS",
+      "TOGGLE_CTM_TEMPERATURE", "TOGGLE_COLD_BRIGHTNESS", "TOGGLE_WARM_BRIGHTNESS",
+      "SWITCH_REFRESH_MODE", "MEDIA_PLAY_PAUSE", "MEDIA_PLAY", "MEDIA_FAST_FORWARD",
+      "MEDIA_REWIND", "VOLUME",
   };
   public static final String[] ACTION_LABELS = {
-      "无", "回到桌面", "返回", "任务切换", "截屏",
-      "区域截屏", "长截屏", "全屏",
-      "音量", "媒体播放", "播放/暂停",
+      "无", "回到桌面", "返回", "任务切换", "截屏", "区域截屏",
+      "清理任务", "刷新屏幕", "待机", "上一页", "下一页",
+      "上一章", "下一章", "优化引擎", "CTM 亮度", "CTM 色温",
+      "冷光", "暖光", "切换刷新模式", "播放/暂停", "媒体播放",
+      "快进", "快退", "音量",
   };
 
   /** 默认映射（Poke6 验证：底部上滑=任务切换、两侧=返回、三指下=截屏；侧滑条默认无） */
