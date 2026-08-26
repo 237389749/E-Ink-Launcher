@@ -106,6 +106,7 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     rootView.findViewById(R.id.menu_ftp).setOnClickListener(this);
     rootView.findViewById(R.id.openDeviceManager).setOnClickListener(this);
     rootView.findViewById(R.id.toggleGestureNav).setOnClickListener(this);
+    rootView.findViewById(R.id.gestureSettings).setOnClickListener(this);
     rootView.findViewById(R.id.refreshMode).setOnClickListener(this);
     if (!RefreshModeHelper.isAvailable()) {
       rootView.findViewById(R.id.refreshMode).setVisibility(View.GONE);
@@ -162,6 +163,72 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
           }
         })
         .show();
+  }
+
+  /** 手势配置设置（root 写 systemui gestures_config + 重启 SystemUI；不含侧滑音量/亮度） */
+  private void showGestureSettingsDialog() {
+    if (!GestureConfigHelper.isRootAvailable()) {
+      Toast.makeText(getActivity(), "需要 root 权限", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    final java.util.Map<String, String> map = new java.util.LinkedHashMap<>();
+    final String[] labels = new String[GestureConfigHelper.POSITIONS.length];
+    String cur = GestureConfigHelper.load();
+    for (int i = 0; i < GestureConfigHelper.POSITIONS.length; i++) {
+      String pos = GestureConfigHelper.POSITIONS[i];
+      String action = "NONE";
+      if (cur != null) {
+        String key = "\"" + pos + "\":\"";
+        int idx = cur.indexOf(key);
+        if (idx >= 0) {
+          int end = cur.indexOf('"', idx + key.length());
+          if (end > idx) action = cur.substring(idx + key.length(), end);
+        }
+      }
+      map.put(pos, action);
+      labels[i] = GestureConfigHelper.POSITION_LABELS[i] + "  [" + actionLabel(action) + "]";
+    }
+    new AlertDialog.Builder(getActivity())
+        .setTitle(R.string.setting_gesture_config)
+        .setItems(labels, new DialogInterface.OnClickListener() {
+          @Override
+          public void onClick(DialogInterface dialog, int which) {
+            showGestureActionDialog(map, which);
+          }
+        })
+        .setPositiveButton("保存并应用", new DialogInterface.OnClickListener() {
+          @Override
+          public void onClick(DialogInterface d, int w) {
+            if (GestureConfigHelper.save(map)) {
+              Toast.makeText(getActivity(), "手势已应用（SystemUI 重启中）", Toast.LENGTH_SHORT).show();
+            } else {
+              Toast.makeText(getActivity(), "保存失败（root/写入错误）", Toast.LENGTH_SHORT).show();
+            }
+          }
+        })
+        .setNegativeButton(android.R.string.cancel, null)
+        .show();
+  }
+
+  /** 单个手势位置的动作选择弹窗 */
+  private void showGestureActionDialog(final java.util.Map<String, String> map, final int pos) {
+    new AlertDialog.Builder(getActivity())
+        .setTitle(GestureConfigHelper.POSITION_LABELS[pos])
+        .setItems(GestureConfigHelper.ACTION_LABELS, new DialogInterface.OnClickListener() {
+          @Override
+          public void onClick(DialogInterface d, int which) {
+            map.put(GestureConfigHelper.POSITIONS[pos], GestureConfigHelper.ACTIONS[which]);
+            showGestureSettingsDialog();
+          }
+        })
+        .show();
+  }
+
+  private String actionLabel(String action) {
+    for (int i = 0; i < GestureConfigHelper.ACTIONS.length; i++) {
+      if (GestureConfigHelper.ACTIONS[i].equals(action)) return GestureConfigHelper.ACTION_LABELS[i];
+    }
+    return action;
   }
 
   private void initSpinners() {
@@ -291,6 +358,8 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     } else if (id == R.id.toggleGestureNav) {
       listener.onToggleGestureNav();
       updateGestureNavLabel();
+    } else if (id == R.id.gestureSettings) {
+      showGestureSettingsDialog();
     } else if (id == R.id.refreshMode) {
       showRefreshModeDialog();
     }
