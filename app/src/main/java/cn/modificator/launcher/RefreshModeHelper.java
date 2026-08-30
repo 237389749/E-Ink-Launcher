@@ -119,20 +119,53 @@ public class RefreshModeHelper {
     return MODE_VALUES[index];
   }
 
-  /** 应用全局刷新模式（index 对应 MODE_NAMES），成功返回 true */
+  /** 应用全局刷新模式（index 对应 MODE_NAMES），成功返回 true。
+   *  采用 prodTest setVCom 同款机制：先 byPass(10) 暂停 EPDC 更新（等效息屏重启的干净初始化），
+   *  再下发 scope + 全刷，最后 byPass(0) 恢复——故障机上模式切换更可靠生效。 */
   public static boolean apply(int index) {
     if (index < 0 || index >= MODE_NAMES.length) return false;
     if (!init()) return false;
-    boolean ok = doApply(index);
+    boolean ok = doApplyWithBypass(index);
     if (!ok && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
       // root 兜底：放开 hidden API 限制后重试一次
       log("apply: retry with hidden_api_policy=1");
       if (enableHiddenApiPolicyViaRoot()) {
-        ok = doApply(index);
+        ok = doApplyWithBypass(index);
       }
     }
     log("apply: " + MODE_NAMES[index] + " -> " + (ok ? "OK" : "FAILED"));
     return ok;
+  }
+
+  /** byPass 暂停 EPDC → 执行切换 → 恢复（finally 保证恢复，避免 EPDC 卡在暂停态） */
+  private static boolean doApplyWithBypass(int index) {
+    boolean ok = false;
+    try {
+      byPass(10);
+      sleep(300);
+      ok = doApply(index);
+      sleep(500);
+    } finally {
+      byPass(0);
+    }
+    return ok;
+  }
+
+  /** 反射调用 ViewUpdateHelper.byPass（SurfaceFlinger BYPASS 事务，暂停/恢复 EPDC 更新） */
+  private static void byPass(int count) {
+    try {
+      viewUpdateHelperClass.getMethod("byPass", int.class).invoke(null, count);
+      log("byPass(" + count + ") -> OK");
+    } catch (Throwable t) {
+      log("byPass(" + count + ") -> EXCEPTION " + t);
+    }
+  }
+
+  private static void sleep(long ms) {
+    try {
+      Thread.sleep(ms);
+    } catch (InterruptedException ignored) {
+    }
   }
 
   private static boolean doApply(int index) {
