@@ -15,11 +15,14 @@ import java.util.Locale;
 /**
  * 墨水屏刷新模式切换（launcher app scope）。
  *
- * 精简模式集（4 项，覆盖高频需求 + 恢复默认）：
+ * 精简模式集（6 项，覆盖高频需求 + 恢复默认）：
  *   None       — 清除 scope，回归系统 per-app 模式管理（系统引擎自身还提供多种模式）
  *   GU(2)      — 无闪烁，16 级灰度（日常）
  *   DEEP_GC(108) — 深度全刷（最清晰）
- *   ANIMATION_X(16777220) — 极速响应（最快）
+ *   REGAL(6)   — 低残影
+ *   GC(98)     — 标准全刷
+ *   GCC(107)   — 压缩全刷
+ * （ANIMATION_X / ANIMATION_MONO 已移除：两者同为 2 级无灰阶，效果重复且不佳）
  *
  * 实现：反射调用 framework 私有类 {@code android.onyx.ViewUpdateHelper}（Onyx 定制 ROM
  * 已将其编入 boot classpath，第三方应用可加载）。对 launcher 自身设置 app scope 波形，
@@ -40,12 +43,10 @@ public class RefreshModeHelper {
   private static final int UI_GC_MODE = 98;
   private static final int UI_GCC_MODE = 107;
   private static final int UI_DEEP_GC_MODE = 108;
-  private static final int UI_X_A2_MODE = 16777220;
-  private static final int UI_MONO_A2_MODE = 33554436;
   /** None 用 -1 表示清除 scope */
   private static final int UI_NONE = -1;
 
-  /** 可选模式集（实测耗时：REGAL 4ms/GC 1ms/GCC 3ms/ANIM_X 5ms/ANIM_MONO 3ms 为快组） */
+  /** 可选模式集（实测耗时：REGAL 4ms/GC 1ms/GCC 3ms 为快组） */
   public static final String[] MODE_NAMES = {
       "None",
       "GU",
@@ -53,8 +54,6 @@ public class RefreshModeHelper {
       "REGAL",
       "GC",
       "GCC",
-      "ANIMATION_X",
-      "ANIMATION_MONO",
   };
 
   public static final String[] LABELS = {
@@ -64,13 +63,11 @@ public class RefreshModeHelper {
       "REGAL — 低残影（快）",
       "GC — 标准全刷（快）",
       "GCC — 压缩全刷（快）",
-      "ANIM X — 极速响应（最快）",
-      "ANIM MONO — 纯黑白滑动",
   };
 
   private static final int[] MODE_VALUES = {
       UI_NONE, UI_GU_MODE, UI_DEEP_GC_MODE, UI_REGAL_MODE, UI_GC_MODE,
-      UI_GCC_MODE, UI_X_A2_MODE, UI_MONO_A2_MODE,
+      UI_GCC_MODE,
   };
 
   private static final String VIEW_UPDATE_HELPER = "android.onyx.ViewUpdateHelper";
