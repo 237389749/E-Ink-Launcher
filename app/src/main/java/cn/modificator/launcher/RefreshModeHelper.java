@@ -37,37 +37,41 @@ import java.util.Locale;
  */
 public class RefreshModeHelper {
 
-  /** ViewUpdateHelper UI 模式值（ref.md：SDMDevice 映射表） */
+  /** ViewUpdateHelper UI 模式值（2026-09-05 实测定性：16级灰=GU/GC/DEEP_GC/REGAL_PLUS 全 38帧 GC16 等价组；
+   *   A2=5帧无灰动画、DU=22帧黑白；详见 ref.md 第 9 节） */
   private static final int UI_GU_MODE = 2;
-  private static final int UI_REGAL_MODE = 6;
   private static final int UI_GC_MODE = 98;
-  private static final int UI_GCC_MODE = 107;
   private static final int UI_DEEP_GC_MODE = 108;
+  private static final int UI_REGAL_PLUS_MODE = 9;
+  private static final int UI_A2_PERFORMANCE_MODE = 4;
+  private static final int UI_DU_MODE = 1;
   /** None 用 -1 表示清除 scope */
   private static final int UI_NONE = -1;
 
-  /** 可选模式集（实测耗时：REGAL 4ms/GC 1ms/GCC 3ms 为快组） */
+  /** 可选模式集（按灰阶档组织：16级灰组 + 无灰阶组） */
   public static final String[] MODE_NAMES = {
       "None",
       "GU",
-      "DEEP_GC",
-      "REGAL",
       "GC",
-      "GCC",
+      "DEEP_GC",
+      "REGAL_PLUS",
+      "A2",
+      "DU",
   };
 
   public static final String[] LABELS = {
       "恢复默认（系统 per-app 模式）",
-      "GU — 无闪烁，16 级灰度（日常）",
-      "DEEP GC — 深度全刷（最清晰）",
-      "REGAL — 低残影（快）",
-      "GC — 标准全刷（快）",
-      "GCC — 压缩全刷（快）",
+      "GU — 16级灰·无闪（日常标准）",
+      "GC — 16级灰·全刷（与 GU 等价，保留）",
+      "DEEP GC — 16级灰·深度清理（多一次 DU 初始化，残影更彻底）",
+      "REGAL PLUS — 16级灰·低残影名（Poke6 实际 = GC16）",
+      "A2 — 无灰阶·5帧极速（动画/滚动；图标会丢灰阶）",
+      "DU — 黑白·22帧完整（无灰但内容完整）",
   };
 
   private static final int[] MODE_VALUES = {
-      UI_NONE, UI_GU_MODE, UI_DEEP_GC_MODE, UI_REGAL_MODE, UI_GC_MODE,
-      UI_GCC_MODE,
+      UI_NONE, UI_GU_MODE, UI_GC_MODE, UI_DEEP_GC_MODE, UI_REGAL_PLUS_MODE,
+      UI_A2_PERFORMANCE_MODE, UI_DU_MODE,
   };
 
   private static final String VIEW_UPDATE_HELPER = "android.onyx.ViewUpdateHelper";
