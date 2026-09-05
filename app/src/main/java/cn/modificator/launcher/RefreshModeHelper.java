@@ -125,7 +125,8 @@ public class RefreshModeHelper {
 
   /** 应用全局刷新模式（index 对应 MODE_NAMES），成功返回 true。
    *  采用 prodTest setVCom 同款机制：先 byPass(10) 暂停 EPDC 更新（等效息屏重启的干净初始化），
-   *  再下发 scope + 全刷，最后 byPass(0) 恢复——故障机上模式切换更可靠生效。 */
+   *  暂停期间只下发 scope；byPass(0) 恢复、模式走完后，再补一次「刷新屏幕」（等同通知栏
+   *  刷新屏幕磁贴的整屏全刷 repaintEverything）——模式生效后的这次刷新才让屏幕立即呈现新波形。 */
   public static boolean apply(int index) {
     if (index < 0 || index >= MODE_NAMES.length) return false;
     if (!init()) return false;
@@ -141,16 +142,22 @@ public class RefreshModeHelper {
     return ok;
   }
 
-  /** byPass 暂停 EPDC → 执行切换 → 恢复（finally 保证恢复，避免 EPDC 卡在暂停态） */
+  /** byPass 暂停 EPDC → 只设 scope → 恢复 → 模式走完后补一次「刷新屏幕」全刷
+   *  （finally 保证恢复，避免 EPDC 卡在暂停态） */
   private static boolean doApplyWithBypass(int index) {
     boolean ok = false;
     try {
       byPass(10);
       sleep(300);
-      ok = doApply(index);
+      ok = doSetScope(index);
       sleep(500);
     } finally {
       byPass(0);
+    }
+    if (ok) {
+      // byPass 已恢复、scope 已生效：等 EPDC 稳定后做一次「刷新屏幕」（磁贴同款整屏全刷）
+      sleep(200);
+      fullRefreshScreen();
     }
     return ok;
   }
@@ -172,25 +179,35 @@ public class RefreshModeHelper {
     }
   }
 
-  private static boolean doApply(int index) {
+  /** 只设 scope（在 byPass 暂停段内调用；此处不做全刷——暂停态发出的刷新不保证执行） */
+  private static boolean doSetScope(int index) {
     try {
       int value = MODE_VALUES[index];
       if (value == UI_NONE) {
         log("apply: clearing app scope");
         viewUpdateHelperClass.getMethod("clearAppScopeUpdate", boolean.class).invoke(null, true);
-        viewUpdateHelperClass.getMethod("repaintEverything").invoke(null);
       } else {
         log("apply: globalScope value=" + value);
-        // 全局 scope（null 包名 = SurfaceFlinger 所有窗口，含第三方应用），再立即全屏刷新
+        // 全局 scope（null 包名 = SurfaceFlinger 所有窗口，含第三方应用）
         viewUpdateHelperClass
             .getMethod("applyAppScopeUpdate", String.class, boolean.class, int.class, int.class, int.class)
             .invoke(null, null, true, 0, value, Integer.MAX_VALUE);
-        viewUpdateHelperClass.getMethod("repaintEverything", int.class).invoke(null, value);
       }
       return true;
     } catch (Throwable t) {
       log("apply: EXCEPTION " + t + "\n" + stackTrace(t));
       return false;
+    }
+  }
+
+  /** 「刷新屏幕」：等同通知栏刷新屏幕磁贴的一次整屏全刷（无参 repaintEverything，
+   *  按当前已生效的 scope 波形重画全部窗口）。失败只记日志，不把已生效的 scope 判为失败。 */
+  private static void fullRefreshScreen() {
+    try {
+      viewUpdateHelperClass.getMethod("repaintEverything").invoke(null);
+      log("apply: refresh screen (post-apply) -> OK");
+    } catch (Throwable t) {
+      log("apply: refresh screen (post-apply) EXCEPTION " + t);
     }
   }
 
