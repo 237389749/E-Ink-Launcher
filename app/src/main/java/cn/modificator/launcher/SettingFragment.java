@@ -158,8 +158,6 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
           public void onClick(DialogInterface dialog, int which) {
             if (RefreshModeHelper.apply(which)) {
               config.setRefreshMode(which);
-              Toast.makeText(getActivity(),
-                  "正在统一各应用刷新档位（后台执行）…", Toast.LENGTH_SHORT).show();
             }
             getActivity().onBackPressed();
           }
