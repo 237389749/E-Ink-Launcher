@@ -134,12 +134,9 @@ public class Launcher extends Activity
     registerStaticReceivers();
     checkLaunchHomeNotification();
 
-    // 恢复上次设置的全局刷新模式（若 Onyx SDK 可用）
+    // 刷新模式：EAC per-app 配置已持久化于系统 MMKV（OECService 启动自动重载），
+    // 无需每次启动重写；config 仅记录 UI 档位供展示/升级迁移。
     RefreshModeHelper.init(this);
-    int refreshMode = config.getRefreshMode();
-    if (refreshMode >= 0 && RefreshModeHelper.isAvailable()) {
-      RefreshModeHelper.apply(refreshMode);
-    }
   }
 
   @Override
