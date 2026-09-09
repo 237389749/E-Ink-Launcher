@@ -1,39 +1,47 @@
 package cn.modificator.launcher;
 
 import android.content.Context;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.os.Build;
+import android.text.TextUtils;
 import android.util.Log;
+import android.widget.Toast;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 
 /**
- * 墨水屏刷新模式切换（launcher app scope）。
+ * 墨水屏刷新模式切换 —— 双管齐下（scope 主通道 + EAC per-app 配置兜底）。
  *
- * 精简模式集（6 项，覆盖高频需求 + 恢复默认）：
- *   None       — 清除 scope，回归系统 per-app 模式管理（系统引擎自身还提供多种模式）
- *   GU(2)      — 无闪烁，16 级灰度（日常）
- *   DEEP_GC(108) — 深度全刷（最清晰）
- *   REGAL(6)   — 低残影
- *   GC(98)     — 标准全刷
- *   GCC(107)   — 压缩全刷
- * （ANIMATION_X / ANIMATION_MONO 已移除：两者同为 2 级无灰阶，效果重复且不佳）
+ * 模式集（7 档，按灰阶档组织；2026-09-05 帧数实测定性，ref.md §9）：
+ *   None/GU/GC/DEEP_GC/REGAL_PLUS/A2/DU
+ *   （16级灰组 GU=GC=DEEP_GC 帧数同族 38帧 GC16；A2=5帧无灰动画；DU=22帧黑白）
  *
- * 实现：反射调用 framework 私有类 {@code android.onyx.ViewUpdateHelper}（Onyx 定制 ROM
- * 已将其编入 boot classpath，第三方应用可加载）。对 launcher 自身设置 app scope 波形，
- * None 则清除 scope 交还系统管理。
+ * 通道（ref.md §12 两台真机确证，2026-09-08）：
+ * 1. scope（ViewUpdateHelper.applyAppScopeUpdate null 包名）是改变第三方 app 真实合成
+ *    翻页波形的【唯一】有效主通道：scope=GU/DU/A2 时翻页分别落 GC16/DU22/A2 5帧，
+ *    与 EAC per-app 配置无关。启动由 Launcher.onCreate 自动恢复 config 档。
+ * 2. EAC per-app 配置（GlobalEacRefreshHelper 遍历写 eac theme refreshConfig：
+ *    refreshModeIndex=NONE + updateMode=<同 scope 的 UI 值>）作为**兜底**：覆盖部分
+ *    普通 app（如起点读书）中不走 scope 的更新路径；None 档从备份 restore。
+ *    实测 EAC 直通不影响 scope 已覆盖的合成翻页，但写入无害且为不走 scope 的路径
+ *    提供第二通道。
  *
- * 两步处理 hidden API 限制（Android 9+）：
- *   1. HiddenApiBypass 豁免 {@code android.onyx} 包
- *   2. 若仍失败，root 下执行 {@code settings put global hidden_api_policy 1} 后重试
- *
- * 所有关键步骤写入文件日志 {@code files/refresh_mode.log}（本机 logcat 缓冲可能失效，
- * 文件日志用于排查；root 可读：adb shell su -c cat /data/data/.../files/refresh_mode.log）。
+ * 执行：scope 段同步（byPass 暂停 → 设 scope → 恢复 → 整屏全刷）；EAC 段在 scope
+ * 成功后后台执行（root su + app_process 调 GlobalEacRefreshHelper，遍历第三方 pkg）。
+ * 手动切档（设置面板）调 {@link #applyWithEac(int)}（双管）；启动恢复调
+ * {@link #apply(int)}（仅 scope，EAC 配置已持久化于系统 MMKV，重启无需重写）。
  */
 public class RefreshModeHelper {
 
@@ -75,11 +83,15 @@ public class RefreshModeHelper {
   };
 
   private static final String VIEW_UPDATE_HELPER = "android.onyx.ViewUpdateHelper";
+  /** EAC 决策 API 所在类（boot classpath，root app_process 可加载；GlobalEacRefreshHelper 用） */
+  private static final String EAC_HELPER = "android.onyx.optimization.EInkHelper";
   private static final String LOG_FILE = "refresh_mode.log";
 
   private static Context appContext;
   private static Class<?> viewUpdateHelperClass;
+  private static Class<?> eacHelperClass;
   private static boolean inited;
+  private static boolean eacInited;
 
   private RefreshModeHelper() {}
 
@@ -110,9 +122,23 @@ public class RefreshModeHelper {
       }
       viewUpdateHelperClass = Class.forName(VIEW_UPDATE_HELPER);
       log("init: ViewUpdateHelper loaded, loader=" + viewUpdateHelperClass.getClassLoader());
+      initEac();
       return true;
     } catch (Throwable t) {
       log("init: ViewUpdateHelper FAILED: " + t);
+      return false;
+    }
+  }
+
+  /** EInkHelper 可用性探测（GlobalEacRefreshHelper 兜底通道；不可用则仅 scope） */
+  private static boolean initEac() {
+    if (eacInited) return eacHelperClass != null;
+    eacInited = true;
+    try {
+      eacHelperClass = Class.forName(EAC_HELPER);
+      return true;
+    } catch (Throwable t) {
+      log("init: EInkHelper unavailable (EAC channel disabled): " + t);
       return false;
     }
   }
@@ -123,10 +149,11 @@ public class RefreshModeHelper {
     return MODE_VALUES[index];
   }
 
-  /** 应用全局刷新模式（index 对应 MODE_NAMES），成功返回 true。
-   *  采用 prodTest setVCom 同款机制：先 byPass(10) 暂停 EPDC 更新（等效息屏重启的干净初始化），
-   *  暂停期间只下发 scope；byPass(0) 恢复、模式走完后，再补一次「刷新屏幕」（等同通知栏
-   *  刷新屏幕磁贴的整屏全刷 repaintEverything）——模式生效后的这次刷新才让屏幕立即呈现新波形。 */
+  /**
+   * 仅 scope 通道应用全局刷新模式（index 对应 MODE_NAMES），成功返回 true。
+   * 用于启动恢复（Launcher.onCreate）：EAC 配置已持久化于系统 MMKV，无需重写。
+   * 机制：byPass(10) 暂停 EPDC → 设 scope → byPass(0) 恢复 → 补「刷新屏幕」整屏全刷。
+   */
   public static boolean apply(int index) {
     if (index < 0 || index >= MODE_NAMES.length) return false;
     if (!init()) return false;
@@ -140,6 +167,106 @@ public class RefreshModeHelper {
     }
     log("apply: " + MODE_NAMES[index] + " -> " + (ok ? "OK" : "FAILED"));
     return ok;
+  }
+
+  /**
+   * 双管齐下：scope 主通道（同步，同上）+ EAC per-app 配置兜底（后台）。
+   * 供设置面板手动切档调用。立即返回 scope 段结果；EAC 段在后台执行并 Toast 汇总。
+   */
+  public static boolean applyWithEac(int index) {
+    if (index < 0 || index >= MODE_NAMES.length) return false;
+    if (!init()) return false;
+    boolean ok = apply(index);
+    if (ok && initEac()) {
+      final int idx = index;
+      log("applyWithEac: EAC fallback async start (mode=" + MODE_NAMES[idx] + ")");
+      Thread worker = new Thread(new Runnable() {
+        @Override
+        public void run() {
+          doApplyEacFallback(idx);
+        }
+      }, "eac-fallback");
+      worker.start();
+    }
+    return ok;
+  }
+
+  /** 后台：root + app_process 调 GlobalEacRefreshHelper 遍历第三方 pkg 写 EAC 配置 */
+  private static void doApplyEacFallback(int index) {
+    try {
+      List<String> pkgs = collectThirdPartyPkgs();
+      if (pkgs.isEmpty()) {
+        log("eac-fallback: no third-party pkg");
+        return;
+      }
+      int value = MODE_VALUES[index];
+      String cmd;
+      String modeArg;
+      if (value == UI_NONE) {
+        cmd = "restore";
+        modeArg = "";
+        log("eac-fallback: restore per-app backups for " + pkgs.size() + " pkgs");
+      } else {
+        cmd = "set";
+        modeArg = " " + value;
+        log("eac-fallback: unify " + pkgs.size() + " pkgs to NONE+updateMode=" + value);
+      }
+      String csv = TextUtils.join(",", pkgs);
+      String clazz = GlobalEacRefreshHelper.class.getName();
+      String apk = appContext.getApplicationInfo().sourceDir;
+      String shellCmd = "CLASSPATH=" + apk + " app_process /system/bin " + clazz
+          + " " + cmd + " " + csv + modeArg;
+      log("eac-fallback: su -c " + shellCmd);
+      String output = runRoot(shellCmd);
+      log("eac-fallback: output:\n" + output);
+      boolean okEac = output.matches("(?s).*RESULT cmd=(set|restore) .*ok=[1-9][0-9]*.*")
+          || (value == UI_NONE && output.contains("no-backup"));
+      toast("EAC 兜底配置" + (okEac ? "已写入 " : "完成（部分跳过）") + pkgs.size()
+          + " 个应用（" + MODE_NAMES[index] + "）");
+    } catch (Throwable t) {
+      log("eac-fallback: EXCEPTION " + t + "\n" + stackTrace(t));
+      toast("EAC 兜底失败：" + t);
+    }
+  }
+
+  /** 枚举第三方 pkg（排除自身、com.onyx / com.android 系统族，防破坏系统优化面板） */
+  private static List<String> collectThirdPartyPkgs() {
+    List<String> pkgs = new ArrayList<>();
+    PackageManager pm = appContext.getPackageManager();
+    List<ApplicationInfo> apps = pm.getInstalledApplications(0);
+    String self = appContext.getPackageName();
+    for (ApplicationInfo ai : apps) {
+      String pkg = ai.packageName;
+      if (pkg == null || pkg.equals(self)) continue;
+      if ((ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0) continue; // 仅第三方
+      if (pkg.startsWith("com.onyx")) continue; // Onyx 系统应用（自有主题通道）
+      if (pkg.startsWith("com.android")) continue;
+      pkgs.add(pkg);
+    }
+    return pkgs;
+  }
+
+  /** su + 执行，收集 stdout/stderr 合并输出 */
+  private static String runRoot(String cmd) throws Exception {
+    Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
+    StringBuilder sb = new StringBuilder();
+    InputStream is = p.getInputStream();
+    try (BufferedReader r = new BufferedReader(new InputStreamReader(is))) {
+      String line;
+      while ((line = r.readLine()) != null) {
+        sb.append(line).append('\n');
+      }
+    }
+    InputStream es = p.getErrorStream();
+    try (BufferedReader r = new BufferedReader(new InputStreamReader(es))) {
+      String line;
+      while ((line = r.readLine()) != null) {
+        sb.append("ERR ").append(line).append('\n');
+      }
+    }
+    p.waitFor();
+    sb.append("exit=").append(p.exitValue()).append('\n');
+    return sb.toString();
   }
 
   /** byPass 暂停 EPDC → 只设 scope → 恢复 → 模式走完后补一次「刷新屏幕」全刷
@@ -222,6 +349,17 @@ public class RefreshModeHelper {
       log("apply: su failed: " + t);
       return false;
     }
+  }
+
+  private static void toast(String msg) {
+    if (appContext == null) return;
+    android.os.Handler main = new android.os.Handler(appContext.getMainLooper());
+    main.post(new Runnable() {
+      @Override
+      public void run() {
+        Toast.makeText(appContext, msg, Toast.LENGTH_LONG).show();
+      }
+    });
   }
 
   // =========================================================================

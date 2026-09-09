@@ -156,8 +156,10 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
         .setItems(RefreshModeHelper.LABELS, new DialogInterface.OnClickListener() {
           @Override
           public void onClick(DialogInterface dialog, int which) {
-            if (RefreshModeHelper.apply(which)) {
+            if (RefreshModeHelper.applyWithEac(which)) {
               config.setRefreshMode(which);
+              Toast.makeText(getActivity(),
+                  "刷新模式已切换（EAC 兜底配置后台执行中…）", Toast.LENGTH_SHORT).show();
             }
             getActivity().onBackPressed();
           }
