@@ -191,7 +191,10 @@ public class RefreshModeHelper {
     return ok;
   }
 
-  /** 后台：root + app_process 调 GlobalEacRefreshHelper 遍历第三方 pkg 写 EAC 配置 */
+  /** EAC 兜底每批处理的 pkg 数（防整批长任务在低内存设备被 OOM/SIGKILL，分批降低峰值与时长） */
+  private static final int EAC_BATCH_SIZE = 4;
+
+  /** 后台：root + app_process 调 GlobalEacRefreshHelper 分批遍历第三方 pkg 写 EAC 配置 */
   private static void doApplyEacFallback(int index) {
     try {
       List<String> pkgs = collectThirdPartyPkgs();
@@ -201,31 +204,56 @@ public class RefreshModeHelper {
       }
       int value = MODE_VALUES[index];
       String cmd;
-      String modeArg;
       if (value == UI_NONE) {
         cmd = "restore";
-        modeArg = "";
         log("eac-fallback: restore per-app backups for " + pkgs.size() + " pkgs");
       } else {
         cmd = "set";
-        modeArg = " " + value;
         log("eac-fallback: unify " + pkgs.size() + " pkgs to NONE+updateMode=" + value);
       }
-      String csv = TextUtils.join(",", pkgs);
-      String clazz = GlobalEacRefreshHelper.class.getName();
-      String apk = appContext.getApplicationInfo().sourceDir;
-      String shellCmd = "CLASSPATH=" + apk + " app_process /system/bin " + clazz
-          + " " + cmd + " " + csv + modeArg;
-      log("eac-fallback: su -c " + shellCmd);
-      String output = runRoot(shellCmd);
-      log("eac-fallback: output:\n" + output);
-      boolean okEac = output.matches("(?s).*RESULT cmd=(set|restore) .*ok=[1-9][0-9]*.*")
-          || (value == UI_NONE && output.contains("no-backup"));
-      toast("EAC 兜底配置" + (okEac ? "已写入 " : "完成（部分跳过）") + pkgs.size()
-          + " 个应用（" + MODE_NAMES[index] + "）");
+      int totalOk = 0;
+      int totalSkip = 0;
+      int killedBatches = 0;
+      for (int from = 0; from < pkgs.size(); from += EAC_BATCH_SIZE) {
+        int to = Math.min(from + EAC_BATCH_SIZE, pkgs.size());
+        List<String> batch = pkgs.subList(from, to);
+        String csv = TextUtils.join(",", batch);
+        String clazz = GlobalEacRefreshHelper.class.getName();
+        String apk = appContext.getApplicationInfo().sourceDir;
+        String shellCmd = "CLASSPATH=" + apk + " app_process /system/bin " + clazz
+            + " " + cmd + " " + csv + (value == UI_NONE ? "" : " " + value);
+        log("eac-fallback: batch[" + from + "-" + (to - 1) + "] su -c " + shellCmd);
+        String output = runRoot(shellCmd);
+        log("eac-fallback: batch output:\n" + output);
+        if (output.contains("RESULT cmd=")) {
+          totalOk += parseCount(output, "ok=");
+          totalSkip += parseCount(output, "skip=");
+        } else if (output.contains("exit=137") || output.contains("Killed")) {
+          killedBatches++; // 该批被系统 OOM 杀，跳过继续下一批
+          log("eac-fallback: batch killed by system (OOM), continue");
+        } else {
+          totalSkip += batch.size();
+        }
+      }
+      toast("EAC 兜底完成：写入 " + totalOk + " 个应用"
+          + (killedBatches > 0 ? "（" + killedBatches + " 批被系统内存回收，可重试）" : ""));
     } catch (Throwable t) {
       log("eac-fallback: EXCEPTION " + t + "\n" + stackTrace(t));
       toast("EAC 兜底失败：" + t);
+    }
+  }
+
+  /** 解析 GlobalEacRefreshHelper RESULT 行中的 key=N（形如 "RESULT cmd=set mode=4 ok=3 skip=1"） */
+  private static int parseCount(String output, String key) {
+    try {
+      int idx = output.indexOf(key);
+      if (idx < 0) return 0;
+      int start = idx + key.length();
+      int end = start;
+      while (end < output.length() && Character.isDigit(output.charAt(end))) end++;
+      return end > start ? Integer.parseInt(output.substring(start, end)) : 0;
+    } catch (Throwable t) {
+      return 0;
     }
   }
 

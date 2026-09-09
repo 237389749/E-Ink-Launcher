@@ -19,6 +19,16 @@
 -keep public class cn.modificator.launcher.R$*{
     public static final int *;
 }
+
+# su + app_process 外部入口类：仅被类名字符串引用（su -c CLASSPATH=<apk>
+# app_process ... <类名> main），R8 无静态引用会 shrink/混淆类名导致
+# ClassNotFoundException abort；必须保留原类名与 main。
+-keep class cn.modificator.launcher.GlobalEacRefreshHelper {
+    public static void main(java.lang.String[]);
+}
+-keep class cn.modificator.launcher.PerAppRefreshHelper {
+    public static void main(java.lang.String[]);
+}
 #-keep class org.apache.** {*;}
 #-keep interface org.apache.** {*;}
 #-dontwarn org.apache.**
