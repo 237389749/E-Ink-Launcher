@@ -15,25 +15,23 @@ import java.util.List;
 import org.json.JSONObject;
 
 /**
- * 全局刷新模式统一入口（root app_process 运行）。
+ * 全局刷新模式 EAC per-app 配置写入入口（root app_process 运行，**save-only**）。
  *
  * 由 launcher 经 {@code su -c "CLASSPATH=<apk> app_process /system/bin cn.modificator.launcher.GlobalEacRefreshHelper <cmd> ..."}
  * 启动。将每个 pkg 的全部 theme 的 refreshConfig 统一改写为
- * {@code refreshModeIndex="NONE" + updateMode=<UI 模式值>} 并 save+apply，使 OECService 的
- * per-app 决策通道（{@code EACBaseRefreshImpl.caculateRefreshConfig}：NONE → updateMode 原值直通，
- * 无任何转换）对该 app 采用目标刷新档。对第三方 app 真实翻页有效（ref.md §13 实测 DU 22 帧）。
+ * {@code refreshModeIndex="NONE" + updateMode=<UI 模式值>} 并 **只 saveEACAppThemes 持久化**，
+ * 使 OECService 下次启动/重载后 per-app 决策（caculateRefreshConfig：NONE → updateMode 直通）
+ * 对该 app 采用目标档。作为双管齐下方案的 EAC 持久兜底通道（scope 主通道即时生效）。
  *
- * 机制依据（res/eink-framework 反编译源码，ref.md §13.1 实测）：
- * - {@code saveEACAppThemes(List)}：全部 theme 持久化到 MMKV（重启后仍生效，长期决策源）
- * - {@code applyEACAppThemes(List)}：仅 active theme（默认 themeType=3）经 validateRefreshMode
- *   （只展开 refreshModeIndex≠NONE 的配置，NONE 直通原样放行）后内存热替换 deviceConfig 并广播
- *   → 前台 app 会被系统重建以载入新配置（无需整机重启；整机重启同样安全，OECService 启动重载 MMKV）
- * - updateMode 值域 = ViewUpdateHelper/UI 组合值（1=DU/2=GU/98=GC/107=GCC/108=DEEP_GC/…），
- *   与 RefreshModeHelper.MODE_VALUES 同域，可直接复用
+ * ⚠️ 刻意不做 applyEACAppThemes（内存热应用）：2026-09-10 实测批量 apply 12 个第三方
+ * app 的 theme → OECService 对每 app 发 configChanged/重建 activity → system_server 窗口
+ * token 风暴（dropbox WTF: WakeLock forbidden @ WindowToken.setExiting）+ 系统重启
+ * （bootreason=reboot）。save-only 写入 MMKV 无热应用副作用；scope 通道负责即时生效，
+ * EAC 配置在下次 OECService 启动重载后接管不走 scope 的路径。
  *
  * cmd:
- *   set     <pkgCsv> <updateMode>   对每 pkg 全部 theme 写 NONE+updateMode；首写前自动备份
- *   restore <pkgCsv>                从备份恢复原 theme（用于"None/恢复默认"档）
+ *   set     <pkgCsv> <updateMode>   对每 pkg 全部 theme 写 NONE+updateMode（save-only）；首写前自动备份
+ *   restore <pkgCsv>                从备份恢复原 theme（save-only，用于"None/恢复默认"档）
  * 备份文件：/data/local/tmp/eac_bak/<pkg>.json（每行一个 theme JSON）
  */
 public class GlobalEacRefreshHelper {
@@ -124,9 +122,10 @@ public class GlobalEacRefreshHelper {
       n++;
     }
     if (n == 0) return null;
+    // save-only：持久化到 MMKV，供 OECService 下次启动/重载读取；不 apply（避免热应用
+    // 窗口重建风暴与系统重启，见类头注释）。
     eInkHelperClass.getMethod("saveEACAppThemes", List.class).invoke(null, edited);
-    eInkHelperClass.getMethod("applyEACAppThemes", List.class).invoke(null, edited);
-    return "themes=" + n + " NONE+mode=" + mode;
+    return "themes=" + n + " NONE+mode=" + mode + " (save-only)";
   }
 
   /** 从备份恢复原 theme（None/恢复默认档） */
@@ -143,9 +142,9 @@ public class GlobalEacRefreshHelper {
       }
     }
     if (originals.isEmpty()) return "empty-backup";
+    // save-only（同 applySet 理由）
     eInkHelperClass.getMethod("saveEACAppThemes", List.class).invoke(null, originals);
-    eInkHelperClass.getMethod("applyEACAppThemes", List.class).invoke(null, originals);
-    return "restored=" + originals.size();
+    return "restored=" + originals.size() + " (save-only)";
   }
 
   private static void backupIfAbsent(String pkg, List<String> themes) throws Exception {
