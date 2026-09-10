@@ -140,6 +140,19 @@ public class Launcher extends Activity
     if (refreshMode >= 0 && RefreshModeHelper.isAvailable()) {
       RefreshModeHelper.apply(refreshMode);
     }
+
+    // 冷启动首屏补一次刷新：图标/自定义图标可能尚未就绪，导致首屏部分图标不显示
+    // （用户反馈"点菜单里的管理应用后就恢复正常"）——延迟重刷列表与图标一次。
+    getWindow().getDecorView().postDelayed(new Runnable() {
+      @Override
+      public void run() {
+        if (isFinishing() || isDestroyed()) return;
+        refreshIcons();
+        if (dataCenter != null) {
+          dataCenter.refreshAppList();
+        }
+      }
+    }, 1200);
   }
 
   @Override
