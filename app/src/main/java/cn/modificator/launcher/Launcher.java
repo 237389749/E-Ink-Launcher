@@ -504,7 +504,8 @@ public class Launcher extends Activity
     }
   }
 
-  /** 经 su + app_process 以 root 身份调 EInkHelper.applyEACAppTheme 写入系统 per-app 配置 */
+  /** 经 su + app_process 以 root 身份调 EInkHelper.applyEACAppTheme 写入系统 per-app 配置
+   *  （su 经 SuHelper 绝对路径解析） */
   private boolean applyPerAppRefreshMode(String pkg, int modeIndex) {
     int modeValue = RefreshModeHelper.getModeValue(modeIndex);
     if (modeValue < 0) return false;
@@ -515,10 +516,10 @@ public class Launcher extends Activity
     String cmd = "CLASSPATH=" + getApplicationInfo().sourceDir
         + " app_process /system/bin cn.modificator.launcher.PerAppRefreshHelper "
         + pkg + " " + b64;
+    Process p = SuHelper.start(cmd);
+    if (p == null) return false;
     try {
-      Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
-      int code = p.waitFor();
-      return code == 0;
+      return p.waitFor() == 0;
     } catch (Exception e) {
       return false;
     }
@@ -768,12 +769,10 @@ public class Launcher extends Activity
   /** 解冻并把 Onyx 原始桌面设为默认 HOME（root；卸载/停用前恢复用） */
   private void setOnyxHomeAsDefault() {
     ensureOnyxHomeEnabled(); // 未启用则先启用
-    try {
-      Runtime.getRuntime().exec(new String[]{"su", "-c",
-          "cmd package set-home-activity com.onyx/.StartupActivity"}).waitFor();
+    if (SuHelper.execOk("cmd package set-home-activity com.onyx/.StartupActivity")) {
       Toast.makeText(this, "已将 Onyx 原始桌面设为默认桌面", Toast.LENGTH_SHORT).show();
-    } catch (Throwable t) {
-      Toast.makeText(this, "设置失败：" + t, Toast.LENGTH_SHORT).show();
+    } else {
+      Toast.makeText(this, "设置失败（root 不可用或命令出错）", Toast.LENGTH_SHORT).show();
     }
   }
 
@@ -791,10 +790,7 @@ public class Launcher extends Activity
     if (isOnyxHomeEnabled()) {
       return;
     }
-    try {
-      Runtime.getRuntime().exec(new String[]{"su", "-c", "pm enable com.onyx"}).waitFor();
-    } catch (Throwable ignored) {
-    }
+    SuHelper.execOk("pm enable com.onyx");
   }
 
   @Override

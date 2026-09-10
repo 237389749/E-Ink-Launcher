@@ -2,8 +2,6 @@ package cn.modificator.launcher;
 
 import android.util.Base64;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -18,6 +16,9 @@ import java.util.Map;
  *
  * 覆盖 Onyx 手势设置的全部 17 个手势位置（底部/左侧/右侧/顶部/三指/侧滑）；
  * 动作集只保留不依赖 Onyx 特有环境的通用动作（无前光/对比度/优化引擎/翻页/笔记等）。
+ *
+ * root 调用统一经 {@link SuHelper}（探测 /debug_ramdisk/su 等绝对路径）——此前直接用
+ * {@code Runtime.exec("su")} 因 app 进程 PATH 不含 /debug_ramdisk 而必然失败（读全空、写报错）。
  */
 public class GestureConfigHelper {
 
@@ -123,38 +124,16 @@ public class GestureConfigHelper {
         && exec("kill $(pidof com.android.systemui)");
   }
 
-  /** 是否有 root（su 可用） */
+  /** 是否有 root（su 可用；经 SuHelper 探测 /debug_ramdisk/su 等绝对路径） */
   public static boolean isRootAvailable() {
-    return exec("id") || exec("su -c id");
+    return SuHelper.isAvailable();
   }
 
   private static boolean exec(String cmd) {
-    try {
-      Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
-      consume(p);
-      return p.waitFor() == 0;
-    } catch (Exception e) {
-      return false;
-    }
+    return SuHelper.execOk(cmd);
   }
 
   private static String execRead(String cmd) {
-    try {
-      Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
-      BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
-      StringBuilder sb = new StringBuilder();
-      String line;
-      while ((line = r.readLine()) != null) sb.append(line);
-      consume(p);
-      p.waitFor();
-      return sb.length() > 0 ? sb.toString() : null;
-    } catch (Exception e) {
-      return null;
-    }
-  }
-
-  private static void consume(Process p) throws Exception {
-    BufferedReader e = new BufferedReader(new InputStreamReader(p.getErrorStream()));
-    while (e.readLine() != null) { /* drain */ }
+    return SuHelper.execRead(cmd);
   }
 }

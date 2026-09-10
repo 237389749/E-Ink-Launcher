@@ -33,7 +33,7 @@ public class GestureNavHelper {
       return true;
     } catch (SecurityException e) {
       String cmd = "settings put global " + KEY + " " + mode;
-      return exec(new String[]{"su", "-c", cmd})
+      return SuHelper.execOk(cmd)
           || exec(new String[]{"sh", "-c", cmd});
     }
   }

@@ -111,11 +111,10 @@ public class CrashCapture implements Thread.UncaughtExceptionHandler {
       }
       // 1) 未启用则直接启用（崩溃兜底的前提）
       if (!enabled) {
-        try {
-          Runtime.getRuntime().exec(new String[]{"su", "-c", "pm enable " + FALLBACK_PACKAGE}).waitFor();
+        if (SuHelper.execOk("pm enable " + FALLBACK_PACKAGE)) {
           Log.i(TAG, "Enabled fallback launcher: " + FALLBACK_PACKAGE);
-        } catch (Throwable t) {
-          Log.w(TAG, "Enable fallback launcher failed: " + t);
+        } else {
+          Log.w(TAG, "Enable fallback launcher failed: " + FALLBACK_PACKAGE);
         }
       }
       // 2) 显式组件启动兜底桌面

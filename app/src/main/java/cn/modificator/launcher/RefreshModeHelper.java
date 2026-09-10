@@ -309,9 +309,12 @@ public class RefreshModeHelper {
     return pkgs;
   }
 
-  /** su + 执行，收集 stdout/stderr 合并输出 */
+  /** su + 执行，收集 stdout/stderr 合并输出（su 路径经 SuHelper 探测绝对路径） */
   private static String runRoot(String cmd) throws Exception {
-    Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
+    Process p = SuHelper.start(cmd);
+    if (p == null) {
+      return "su not available (SuHelper)\n";
+    }
     StringBuilder sb = new StringBuilder();
     InputStream is = p.getInputStream();
     try (BufferedReader r = new BufferedReader(new InputStreamReader(is))) {
@@ -407,15 +410,9 @@ public class RefreshModeHelper {
 
   /** root 执行 settings put global hidden_api_policy 1（Magisk su；非 root 设备静默失败） */
   private static boolean enableHiddenApiPolicyViaRoot() {
-    try {
-      Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", "settings put global hidden_api_policy 1"});
-      int code = p.waitFor();
-      log("apply: su hidden_api_policy exit=" + code);
-      return code == 0;
-    } catch (Throwable t) {
-      log("apply: su failed: " + t);
-      return false;
-    }
+    boolean ok = SuHelper.execOk("settings put global hidden_api_policy 1");
+    log("apply: su hidden_api_policy ok=" + ok);
+    return ok;
   }
 
   private static void toast(String msg) {
