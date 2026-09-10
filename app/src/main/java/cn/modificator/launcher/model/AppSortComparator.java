@@ -111,7 +111,8 @@ public class AppSortComparator implements Comparator<ResolveInfo> {
   private boolean isVirtual(ResolveInfo info) {
     String pkg = info.activityInfo.packageName;
     return AppDataCenter.LOCK_PACKAGE_NAME.equals(pkg)
-        || AppDataCenter.WIFI_PACKAGE_NAME.equals(pkg);
+        || AppDataCenter.WIFI_PACKAGE_NAME.equals(pkg)
+        || AppDataCenter.ONYX_HOME_PACKAGE_NAME.equals(pkg);
   }
 
   private int compareByName(ResolveInfo a, ResolveInfo b) {

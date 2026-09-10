@@ -3,6 +3,7 @@ package cn.modificator.launcher.model;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.ResolveInfo;
 import android.widget.TextView;
 
@@ -243,6 +244,13 @@ public class AppDataCenter {
     resolveInfo.icon = R.mipmap.ic_launcher;
     resolveInfo.activityInfo = new ActivityInfo();
     resolveInfo.activityInfo.packageName = ONYX_HOME_PACKAGE_NAME;
+    // 关键：必须给 applicationInfo 提供 nonLocalizedLabel，否则排序/显示路径调
+    // ResolveInfo.loadLabel() 会因 applicationInfo 为 null 而 NPE（启动崩溃）。
+    ActivityInfo ai = resolveInfo.activityInfo;
+    ApplicationInfo appInfo = new ApplicationInfo();
+    appInfo.packageName = ONYX_HOME_PACKAGE_NAME;
+    appInfo.nonLocalizedLabel = "Onyx 桌面";
+    ai.applicationInfo = appInfo;
     return resolveInfo;
   }
 }
