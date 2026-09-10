@@ -86,6 +86,8 @@ public class GestureConfigHelper {
 
   /** 读取当前 gestures_config（root），失败返回 null */
   public static String load() {
+    // 确保 SuHelper 文件日志可用（root 可读 files/su_debug.log 排查）
+    SuHelper.init(App.getInstance().getFilesDir());
     return execRead("cat " + GESTURES_CONFIG);
   }
 

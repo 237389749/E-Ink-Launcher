@@ -1,53 +1,87 @@
 package cn.modificator.launcher;
 
+import android.util.Log;
+
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStreamReader;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+import java.util.concurrent.TimeUnit;
 
 /**
  * root / su 调用统一入口。
  *
- * 根因（2026-09-10 在故障机实测确认）：本机 Magisk 的 su **只存在于 /debug_ramdisk/su**，
- * /system/bin/su 与 /system/xbin/su 都不存在；而 app 进程的 PATH 不包含 /debug_ramdisk，
- * 因此 {@code Runtime.exec(new String[]{"su", "-c", ...})} 会抛 IOException
- * （shell 报 "su: inaccessible or not found"）——表现为所有 root 功能静默失败：
- * 手势设置读出来全是"无"、保存报错（GestureConfigHelper），以及导航模式/刷新模式/启用
- * Onyx 桌面等 su 操作全部无效。
+ * 根因（2026-09-10 实测）：Magisk 的 su 只存在于 /debug_ramdisk/su
+ * （/system/bin/su、/system/xbin/su 均不存在），而 app 进程 PATH 不含 /debug_ramdisk，
+ * 因此 {@code Runtime.exec(new String[]{"su", "-c", ...})} 抛 IOException
+ * （"su: inaccessible or not found"）→ 所有 root 功能静默失败（手势设置读全空/保存报错等）。
  *
- * 本类按优先级探测 su 的绝对路径并缓存（实测 app 进程可直接执行 /debug_ramdisk/su），
- * 最后回退到 PATH 中的 "su"（magisk 老版本 /system/bin/su 或其它 root 环境）。
+ * 本类按优先级探测 su 的绝对路径并缓存；探测带超时保护（Magisk 授权弹窗未确认时
+ * 不会挂死 UI 线程）。所有关键步骤写文件日志 {@code files/su_debug.log}
+ * （root 可读：{@code adb shell su -c cat /data/data/cn.modificator.launcher/files/su_debug.log}）。
  */
 public final class SuHelper {
 
+  private static final String TAG = "SuHelper";
+  private static final String LOG_FILE = "su_debug.log";
+  private static final int TIMEOUT_SEC = 8;
+
   /** 候选 su 路径（按优先级） */
   private static final String[] CANDIDATES = {
-      "/debug_ramdisk/su",   // Magisk（当前设备，实测可用）
+      "/debug_ramdisk/su",   // Magisk（当前设备实测位置）
       "/system/bin/su",      // Magisk 老版本 / 其它 root
       "/system/xbin/su",
       "/sbin/su",
-      "su",                  // PATH 回退（adb shell 等环境）
+      "su",                  // PATH 回退（adb shell / 部分环境）
   };
 
+  private static File logDir;
   private static boolean probed;
   private static String resolved;
 
   private SuHelper() {}
 
+  /** 初始化日志目录（Launcher/Application onCreate 调用，可选） */
+  public static void init(File filesDir) {
+    logDir = filesDir;
+  }
+
   /** 返回可用的 su 命令（绝对路径或 "su"）；无可用返回 null。结果缓存 */
   public static synchronized String suPath() {
     if (probed) return resolved;
     probed = true;
+    log("probe start");
     for (String c : CANDIDATES) {
       try {
+        if (c.startsWith("/")) {
+          File f = new File(c);
+          if (!f.exists() || !f.canExecute()) {
+            log("probe " + c + " skip exists=" + f.exists() + " exec=" + f.canExecute());
+            continue;
+          }
+        }
         Process p = Runtime.getRuntime().exec(new String[]{c, "-c", "id"});
         drain(p);
-        if (p.waitFor() == 0) {
+        boolean done = p.waitFor(TIMEOUT_SEC, TimeUnit.SECONDS);
+        if (!done) {
+          p.destroy();
+          log("probe " + c + " TIMEOUT (Magisk authorization not confirmed?)");
+          continue;
+        }
+        int rc = p.exitValue();
+        log("probe " + c + " rc=" + rc);
+        if (rc == 0) {
           resolved = c;
           break;
         }
-      } catch (Throwable ignored) {
-        // 路径不存在 / 不可执行 → 试下一个
+      } catch (Throwable t) {
+        log("probe " + c + " exception: " + t);
       }
     }
+    log("suPath=" + resolved);
     return resolved;
   }
 
@@ -59,11 +93,22 @@ public final class SuHelper {
   /** 执行 root 命令，exit 0 返回 true */
   public static boolean execOk(String cmd) {
     Process p = start(cmd);
-    if (p == null) return false;
+    if (p == null) {
+      log("execOk FAIL(no su): " + shortCmd(cmd));
+      return false;
+    }
     try {
-      drain(p);
-      return p.waitFor() == 0;
+      StringBuilder err = new StringBuilder();
+      BufferedReader e = new BufferedReader(new InputStreamReader(p.getErrorStream()));
+      String line;
+      while ((line = e.readLine()) != null) err.append(line).append(';');
+      boolean done = p.waitFor(TIMEOUT_SEC, TimeUnit.SECONDS);
+      int rc = done ? p.exitValue() : -1;
+      if (!done) p.destroy();
+      log("execOk rc=" + rc + " err=" + trim(err.toString()) + " cmd=" + shortCmd(cmd));
+      return done && rc == 0;
     } catch (Throwable t) {
+      log("execOk exception: " + t + " cmd=" + shortCmd(cmd));
       return false;
     }
   }
@@ -71,16 +116,22 @@ public final class SuHelper {
   /** 执行 root 命令并返回 stdout（strip 换行）；失败或无输出返回 null */
   public static String execRead(String cmd) {
     Process p = start(cmd);
-    if (p == null) return null;
+    if (p == null) {
+      log("execRead FAIL(no su): " + shortCmd(cmd));
+      return null;
+    }
     try {
       StringBuilder sb = new StringBuilder();
       BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
       String line;
       while ((line = r.readLine()) != null) sb.append(line);
       drain(p);
-      p.waitFor();
+      boolean done = p.waitFor(TIMEOUT_SEC, TimeUnit.SECONDS);
+      if (!done) p.destroy();
+      log("execRead len=" + sb.length() + " done=" + done + " cmd=" + shortCmd(cmd));
       return sb.length() > 0 ? sb.toString() : null;
     } catch (Throwable t) {
+      log("execRead exception: " + t + " cmd=" + shortCmd(cmd));
       return null;
     }
   }
@@ -92,14 +143,43 @@ public final class SuHelper {
     try {
       return Runtime.getRuntime().exec(new String[]{su, "-c", cmd});
     } catch (Throwable t) {
+      log("start exception: " + t + " cmd=" + shortCmd(cmd));
       return null;
     }
+  }
+
+  // =========================================================================
+  // 日志（logcat + files/su_debug.log）
+  // =========================================================================
+
+  private static String shortCmd(String cmd) {
+    if (cmd == null) return "null";
+    return cmd.length() > 80 ? cmd.substring(0, 80) + "..." : cmd;
+  }
+
+  private static String trim(String s) {
+    if (s == null) return "";
+    return s.length() > 160 ? s.substring(0, 160) + "..." : s;
   }
 
   private static void drain(Process p) {
     try {
       BufferedReader e = new BufferedReader(new InputStreamReader(p.getErrorStream()));
       while (e.readLine() != null) { /* drain */ }
+    } catch (Throwable ignored) {
+    }
+  }
+
+  private static void log(String msg) {
+    Log.i(TAG, msg);
+    if (logDir == null) return;
+    try {
+      File f = new File(logDir, LOG_FILE);
+      String line = new SimpleDateFormat("MM-dd HH:mm:ss", Locale.US).format(new Date())
+          + " " + msg + "\n";
+      try (FileOutputStream fos = new FileOutputStream(f, true)) {
+        fos.write(line.getBytes());
+      }
     } catch (Throwable ignored) {
     }
   }
