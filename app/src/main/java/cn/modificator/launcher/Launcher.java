@@ -365,7 +365,7 @@ public class Launcher extends Activity
     } else if (AppDataCenter.WIFI_PACKAGE_NAME.equals(packageName)) {
       WifiControl.onLongClickWifiItem();
     } else if (AppDataCenter.ONYX_HOME_PACKAGE_NAME.equals(packageName)) {
-      Toast.makeText(this, "点按图标可切换到 Onyx 原始桌面", Toast.LENGTH_SHORT).show();
+      showOnyxHomeMenu();
     } else {
       showAppInfoDialog(info, packageName);
     }
@@ -735,6 +735,35 @@ public class Launcher extends Activity
       startActivity(home);
     } catch (ActivityNotFoundException | SecurityException e) {
       Toast.makeText(this, "未找到 Onyx 原始桌面（com.onyx），可能已卸载", Toast.LENGTH_LONG).show();
+    }
+  }
+
+  /** 长按"原始桌面"图标菜单：启动 / 设为默认桌面（卸载前恢复用） */
+  private void showOnyxHomeMenu() {
+    new AlertDialog.Builder(this)
+        .setTitle("Onyx 原始桌面")
+        .setItems(new String[]{"切换到原始桌面", "设为默认桌面（卸载前恢复）"},
+            new DialogInterface.OnClickListener() {
+              @Override
+              public void onClick(DialogInterface dialog, int which) {
+                if (which == 0) {
+                  launchOnyxHome();
+                } else {
+                  setOnyxHomeAsDefault();
+                }
+              }
+            })
+        .show();
+  }
+
+  /** 解冻并把 Onyx 原始桌面设为默认 HOME（root；卸载/停用前恢复用） */
+  private void setOnyxHomeAsDefault() {
+    try {
+      Runtime.getRuntime().exec(new String[]{"su", "-c",
+          "pm enable com.onyx; cmd package set-home-activity com.onyx/.StartupActivity"}).waitFor();
+      Toast.makeText(this, "已将 Onyx 原始桌面设为默认桌面", Toast.LENGTH_SHORT).show();
+    } catch (Throwable t) {
+      Toast.makeText(this, "设置失败：" + t, Toast.LENGTH_SHORT).show();
     }
   }
 
