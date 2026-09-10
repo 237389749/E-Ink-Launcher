@@ -25,6 +25,8 @@ public class AppDataCenter {
   public static final String WIFI_PACKAGE_NAME = "E-ink_Launcher.WiFi";
   /** 虚拟包名：一键锁屏入口 */
   public static final String LOCK_PACKAGE_NAME = "E-ink_Launcher.Lock";
+  /** 虚拟包名：一键切换 Onyx 原始桌面入口（自定义图标：E-ink_Launcher.OnyxHome.png） */
+  public static final String ONYX_HOME_PACKAGE_NAME = "E-ink_Launcher.OnyxHome";
 
   private final Context mContext;
   private final List<ResolveInfo> mApps = new ArrayList<>();
@@ -173,6 +175,9 @@ public class AppDataCenter {
     if (!hideApps.contains(WIFI_PACKAGE_NAME)) {
       mApps.add(createWifiIcon());
     }
+    if (!hideApps.contains(ONYX_HOME_PACKAGE_NAME)) {
+      mApps.add(createOnyxHomeIcon());
+    }
     sortApps();
     updatePageCount();
   }
@@ -185,6 +190,7 @@ public class AppDataCenter {
     mApps.addAll(mContext.getPackageManager().queryIntentActivities(mainIntent, 0));
     mApps.add(createPowerIcon());
     mApps.add(createWifiIcon());
+    mApps.add(createOnyxHomeIcon());
     if (binder != null) {
       binder.setHideAppPkg(hideApps);
     }
@@ -228,6 +234,15 @@ public class AppDataCenter {
     resolveInfo.icon = R.drawable.ic_onekeylock;
     resolveInfo.activityInfo = new ActivityInfo();
     resolveInfo.activityInfo.packageName = LOCK_PACKAGE_NAME;
+    return resolveInfo;
+  }
+
+  /** 虚拟图标：一键切换 Onyx 原始桌面（默认图标用 launcher 自身图标，可放自定义 E-ink_Launcher.OnyxHome.png） */
+  private ResolveInfo createOnyxHomeIcon() {
+    ResolveInfo resolveInfo = new ResolveInfo();
+    resolveInfo.icon = R.mipmap.ic_launcher;
+    resolveInfo.activityInfo = new ActivityInfo();
+    resolveInfo.activityInfo.packageName = ONYX_HOME_PACKAGE_NAME;
     return resolveInfo;
   }
 }

@@ -339,6 +339,8 @@ public class Launcher extends Activity
       lockScreen();
     } else if (AppDataCenter.WIFI_PACKAGE_NAME.equals(pkgName)) {
       WifiControl.onClickWifiItem();
+    } else if (AppDataCenter.ONYX_HOME_PACKAGE_NAME.equals(pkgName)) {
+      launchOnyxHome();
     } else {
       ComponentName comp = new ComponentName(info.activityInfo.packageName, info.activityInfo.name);
       Intent intent = new Intent(Intent.ACTION_MAIN);
@@ -362,6 +364,8 @@ public class Launcher extends Activity
       showPowerMenu();
     } else if (AppDataCenter.WIFI_PACKAGE_NAME.equals(packageName)) {
       WifiControl.onLongClickWifiItem();
+    } else if (AppDataCenter.ONYX_HOME_PACKAGE_NAME.equals(packageName)) {
+      Toast.makeText(this, "点按图标可切换到 Onyx 原始桌面", Toast.LENGTH_SHORT).show();
     } else {
       showAppInfoDialog(info, packageName);
     }
@@ -707,6 +711,31 @@ public class Launcher extends Activity
         })
         .setNegativeButton(R.string.dialog_cancel, null)
         .show();
+  }
+
+  /**
+   * 一键切换到 Onyx 原始桌面（com.onyx/.StartupActivity）：
+   * 1) 先解冻/启用 com.onyx（该包常被 disable-user/冻结，禁用状态无法启动）
+   * 2) 以显式组件 + CATEGORY_HOME 启动原始桌面（失败则 Toast 提示，不崩溃）
+   * 自定义图标：E-ink_Launcher.OnyxHome.png
+   */
+  public void launchOnyxHome() {
+    // 1) 解冻（root；失败不阻塞后面尝试启动）
+    try {
+      Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", "pm enable com.onyx"});
+      p.waitFor();
+    } catch (Throwable ignored) {
+    }
+    // 2) 启动原始桌面
+    Intent home = new Intent(Intent.ACTION_MAIN);
+    home.addCategory(Intent.CATEGORY_HOME);
+    home.setClassName("com.onyx", "com.onyx.StartupActivity");
+    home.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+    try {
+      startActivity(home);
+    } catch (ActivityNotFoundException | SecurityException e) {
+      Toast.makeText(this, "未找到 Onyx 原始桌面（com.onyx），可能已卸载", Toast.LENGTH_LONG).show();
+    }
   }
 
   @Override
