@@ -141,8 +141,8 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
     TextView tv = rootView.findViewById(R.id.toggleGestureNav);
     boolean isGesture = GestureNavHelper.isGestureMode();
     tv.setText(isGesture
-        ? getString(R.string.setting_gesture_nav) + " (ON)"
-        : getString(R.string.setting_virtual_key_nav) + " (OFF)");
+        ? "手势已启用（点击切换底部按键）"
+        : "按键已启用（点击切换手势）");
   }
 
   /** 全局刷新模式选择弹窗（模式集与系统引擎 4 模式互补） */

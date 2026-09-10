@@ -71,6 +71,7 @@
     <string name="battery_status_low_battery">电量低</string>
     <string name="show_custom_icon">显示自定义图标</string>
     <string name="setting_gesture_nav">手势导航</string>
+    <string name="setting_gesture_config">手势设置</string>
     <string name="setting_refresh_mode">全局刷新模式</string>
     <string name="setting_virtual_key_nav">虚拟按键</string>
     <string name="show_statusbar">显示状态栏</string>
