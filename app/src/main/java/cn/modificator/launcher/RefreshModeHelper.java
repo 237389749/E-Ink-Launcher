@@ -214,6 +214,29 @@ public class RefreshModeHelper {
         return;
       }
       int value = MODE_VALUES[index];
+      // ── 双防御第二道：官方写法（root）──────────────────────────────
+      // EInkHelper.setAppScopeRefreshMode(逻辑档) → 改当前 top app + fallback 内存配置
+      // + 立即 per-pkg scope + saveDeviceConfig 持久化（与官方磁贴同路径）。
+      // 其内部会 applyAppScopeUpdate(当前pkg)/clear，可能影响我们的全局 null scope，
+      // 故随后重设一次我们的全局 scope，确保主通道最终生效。
+      if (value != LM_NONE) {
+        try {
+          String clazz0 = GlobalEacRefreshHelper.class.getName();
+          String apk0 = appContext.getApplicationInfo().sourceDir;
+          String officialCmd = "CLASSPATH=" + apk0 + " app_process /system/bin " + clazz0
+              + " official " + value;
+          log("eac-fallback: official -> su -c " + officialCmd);
+          String officialOut = runRoot(officialCmd);
+          log("eac-fallback: official output:\n" + officialOut);
+        } catch (Throwable t) {
+          log("eac-fallback: official EXCEPTION " + t);
+        }
+        sleep(300);
+        if (doSetScope(index)) {
+          log("eac-fallback: global scope re-applied after official (logic=" + value + ")");
+        }
+      }
+      // ── 第三道：各 app 自定义 theme save-only 持久化（分批）────────────
       String cmd;
       if (value == LM_NONE) {
         cmd = "restore";

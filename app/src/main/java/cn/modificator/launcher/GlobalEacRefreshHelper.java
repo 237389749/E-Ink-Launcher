@@ -43,11 +43,32 @@ public class GlobalEacRefreshHelper {
 
   public static void main(String[] args) {
     if (args.length < 2) {
-      System.err.println("usage: GlobalEacRefreshHelper <set|restore> <pkgCsv> [updateMode]");
+      System.err.println("usage: GlobalEacRefreshHelper <set|restore> <pkgCsv> [updateMode] | official <logicMode>");
       System.exit(2);
       return;
     }
     String cmd = args[0];
+    if ("official".equals(cmd)) {
+      // 官方写法（双防御第二道）：EInkHelper.setAppScopeRefreshMode(逻辑mode)
+      // → OECService.setAppScopeRefreshMode → TabletEACRefreshImpl：
+      //   改当前 top app + fallback 内存配置 + 立即 applyAppScopeUpdate(pkg) + saveDeviceConfig 持久化
+      // root app_process 绕过 SELinux 限制（普通第三方被拦）
+      int logicMode = Integer.parseInt(args[1]);
+      if (!init()) {
+        System.err.println("FAIL EInkHelper unavailable");
+        System.exit(1);
+        return;
+      }
+      try {
+        eInkHelperClass.getMethod("setAppScopeRefreshMode", int.class).invoke(null, logicMode);
+        System.out.println("OK official setAppScopeRefreshMode mode=" + logicMode);
+        System.exit(0);
+      } catch (Throwable t) {
+        System.err.println("FAIL official: " + t);
+        System.exit(1);
+      }
+      return;
+    }
     String[] pkgs = args[1].split(",");
     int mode = 0;
     if ("set".equals(cmd)) {
