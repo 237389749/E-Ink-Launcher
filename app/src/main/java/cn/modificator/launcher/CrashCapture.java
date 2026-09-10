@@ -28,6 +28,8 @@ public class CrashCapture implements Thread.UncaughtExceptionHandler {
 
   private static final String TAG = "CrashCapture";
   private static final String FALLBACK_PACKAGE = "com.onyx";
+  /** 兜底桌面的 HOME activity（com.onyx 的 HOME 组件；显式启动比 setPackage 解析更稳） */
+  private static final String FALLBACK_ACTIVITY = "com.onyx.StartupActivity";
   private static final CrashCapture INSTANCE = new CrashCapture();
   private static final SimpleDateFormat DATE_FORMAT =
       new SimpleDateFormat("yyyy-MM-dd-HH-mm-ss", Locale.getDefault());
@@ -88,19 +90,40 @@ public class CrashCapture implements Thread.UncaughtExceptionHandler {
   }
 
   /**
-   * 启动文石默认桌面作为兜底（面向文石设备）。包不存在或被冻结时静默失败。
+   * 启动文石默认桌面作为兜底（面向文石设备）。
+   *
+   * 关键：com.onyx 常处于 DISABLED_USER/冻结态（实测 enabled=3），禁用时
+   * `setPackage + CATEGORY_HOME` 解析不到组件 → 兜底失效。故：
+   *   1) 判定启用状态：未启用则直接启用（root su pm enable）
+   *   2) 用显式组件 com.onyx/.StartupActivity 启动（比 setPackage 解析更稳）
+   * 包不存在时静默返回。
    */
   private void startFallbackLauncher() {
     try {
-      PackageManager pm = appContext.getPackageManager();
-      pm.getPackageInfo(FALLBACK_PACKAGE, 0);
+      boolean enabled;
+      try {
+        //noinspection deprecation
+        enabled = appContext.getPackageManager()
+            .getApplicationInfo(FALLBACK_PACKAGE, 0).enabled;
+      } catch (PackageManager.NameNotFoundException e) {
+        Log.i(TAG, "Fallback launcher not found: " + FALLBACK_PACKAGE);
+        return;
+      }
+      // 1) 未启用则直接启用（崩溃兜底的前提）
+      if (!enabled) {
+        try {
+          Runtime.getRuntime().exec(new String[]{"su", "-c", "pm enable " + FALLBACK_PACKAGE}).waitFor();
+          Log.i(TAG, "Enabled fallback launcher: " + FALLBACK_PACKAGE);
+        } catch (Throwable t) {
+          Log.w(TAG, "Enable fallback launcher failed: " + t);
+        }
+      }
+      // 2) 显式组件启动兜底桌面
       Intent intent = new Intent(Intent.ACTION_MAIN);
       intent.addCategory(Intent.CATEGORY_HOME);
-      intent.setPackage(FALLBACK_PACKAGE);
+      intent.setClassName(FALLBACK_PACKAGE, FALLBACK_ACTIVITY);
       intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
       appContext.startActivity(intent);
-    } catch (PackageManager.NameNotFoundException e) {
-      Log.i(TAG, "Fallback launcher not found: " + FALLBACK_PACKAGE);
     } catch (Exception e) {
       Log.w(TAG, "Failed to start fallback launcher: " + e);
     }
