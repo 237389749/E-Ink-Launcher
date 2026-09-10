@@ -24,62 +24,73 @@ import java.util.Locale;
 /**
  * 墨水屏刷新模式切换 —— 双管齐下（scope 主通道 + EAC per-app 配置兜底）。
  *
- * 模式集（7 档，按灰阶档组织；2026-09-05 帧数实测定性，ref.md §9）：
- *   None/GU/GC/DEEP_GC/REGAL_PLUS/A2/DU
- *   （16级灰组 GU=GC=DEEP_GC 帧数同族 38帧 GC16；A2=5帧无灰动画；DU=22帧黑白）
+ * 模式集（7 档，采用 Onyx **逻辑 mode 域**，与官方磁贴/EAC 决策同语义）：
+ *   None + 逻辑 0/1/2/3/4/5 = NORMAL/DU/A2/REGAL/X/REGAL_PLUS
+ *   （Constant.UPDATE_MODE_* = 0 DEFAULT/NORMAL、1 DU、2 A2、3 REGAL、4 X、5 REGAL_PLUS）
  *
- * 通道（ref.md §12 两台真机确证，2026-09-08）：
+ * 值域说明（ref.md §12.9）：
+ * - EAC refreshConfig.updateMode 字段在官方路径（setAppScopeRefreshMode 的 setUpdateMode）
+ *   存的就是**逻辑 mode 0-5**；NONE 直通时该值交由 ViewUpdateHelper 解释 → 故本档位值
+ *   直接作为 EAC 写入值（与官方一致）。
+ * - scope 通道 applyAppScopeUpdate 接受 UI/EPD 值，需经 EACUtils.toEpdMode 转换：
+ *   逻辑 0→5(AUTO) / 1→2305(DU|0x900) / 2→2308(A2|0x900) / 3→6(REGAL) /
+ *   4→16777220(X_A2) / 5→9(REGAL_PLUS)。2305/2308 的基础值是 DU(1)/A2(4)，
+ *   0x900 为质量标志位；DU4 是独立值（UI 2312 / EPD 8），逻辑域不可达。
+ *
+ * 通道（ref.md §12 两台真机确证）：
  * 1. scope（ViewUpdateHelper.applyAppScopeUpdate null 包名）是改变第三方 app 真实合成
- *    翻页波形的【唯一】有效主通道：scope=GU/DU/A2 时翻页分别落 GC16/DU22/A2 5帧，
- *    与 EAC per-app 配置无关。启动由 Launcher.onCreate 自动恢复 config 档。
- * 2. EAC per-app 配置（GlobalEacRefreshHelper 遍历写 eac theme refreshConfig：
- *    refreshModeIndex=NONE + updateMode=<同 scope 的 UI 值>）作为**兜底**：覆盖部分
- *    普通 app（如起点读书）中不走 scope 的更新路径；None 档从备份 restore。
- *    实测 EAC 直通不影响 scope 已覆盖的合成翻页，但写入无害且为不走 scope 的路径
- *    提供第二通道。
+ *    翻页波形的【唯一】有效主通道（实测 UI 1/2/4 → waveform1/22帧 DU、GC16 38帧、A2 5帧）；
+ *    启动由 Launcher.onCreate 自动恢复 config 档。
+ * 2. EAC per-app 配置（GlobalEacRefreshHelper 分批写 eac theme：refreshModeIndex=NONE +
+ *    updateMode=<逻辑 mode>，save-only 持久化）作为兜底，消除批量热应用的窗口风暴；
+ *    以 OECService 下次启动重载为生效点。
  *
- * 执行：scope 段同步（byPass 暂停 → 设 scope → 恢复 → 整屏全刷）；EAC 段在 scope
- * 成功后后台执行（root su + app_process 调 GlobalEacRefreshHelper，遍历第三方 pkg）。
- * 手动切档（设置面板）调 {@link #applyWithEac(int)}（双管）；启动恢复调
- * {@link #apply(int)}（仅 scope，EAC 配置已持久化于系统 MMKV，重启无需重写）。
+ * 执行：scope 段同步（byPass 暂停 → 设 scope → 恢复 → 整屏全刷）；EAC 段在 scope 成功后
+ * 后台分批执行。手动切档（设置面板）调 {@link #applyWithEac(int)}（双管）；
+ * 启动恢复调 {@link #apply(int)}（仅 scope，EAC 配置已持久化于系统 MMKV）。
  */
 public class RefreshModeHelper {
 
-  /** ViewUpdateHelper UI 模式值（2026-09-05 实测定性：16级灰=GU/GC/DEEP_GC/REGAL_PLUS 全 38帧 GC16 等价组；
-   *   A2=5帧无灰动画、DU=22帧黑白；详见 ref.md 第 9 节） */
-  private static final int UI_GU_MODE = 2;
-  private static final int UI_GC_MODE = 98;
-  private static final int UI_DEEP_GC_MODE = 108;
-  private static final int UI_REGAL_PLUS_MODE = 9;
-  private static final int UI_A2_PERFORMANCE_MODE = 4;
-  private static final int UI_DU_MODE = 1;
-  /** None 用 -1 表示清除 scope */
-  private static final int UI_NONE = -1;
+  /** Onyx 逻辑 mode 域（Constant.UPDATE_MODE_*；EAC 决策与官方磁贴同域） */
+  private static final int LM_NONE = -1;
+  private static final int LM_NORMAL = 0;
+  private static final int LM_DU = 1;
+  private static final int LM_A2 = 2;
+  private static final int LM_REGAL = 3;
+  private static final int LM_X = 4;
+  private static final int LM_REGAL_PLUS = 5;
 
-  /** 可选模式集（按灰阶档组织：16级灰组 + 无灰阶组） */
+  /**
+   * 逻辑 mode → scope 通道 UI/EPD 值（等价 EACUtils.toEpdMode，索引 0..5）。
+   * 0→5(AUTO,交系统) / 1→2305(DU|0x900) / 2→2308(A2|0x900) / 3→6 / 4→16777220 / 5→9。
+   * ⚠ 2305/2308/16777220 在 scope 通道的实测校准（与已知有效的裸值 1/4 对比）待设备重连验证。
+   */
+  private static final int[] LOGIC_TO_SCOPE = {5, 2305, 2308, 6, 16777220, 9};
+
+  /** 可选模式集（Onyx 逻辑档：None + NORMAL/DU/A2/REGAL/X/REGAL_PLUS） */
   public static final String[] MODE_NAMES = {
       "None",
-      "GU",
-      "GC",
-      "DEEP_GC",
-      "REGAL_PLUS",
-      "A2",
+      "NORMAL",
       "DU",
+      "A2",
+      "REGAL",
+      "X",
+      "REGAL_PLUS",
   };
 
   public static final String[] LABELS = {
-      "恢复默认（系统 per-app 模式）",
-      "GU — 16级灰·无闪（日常标准）",
-      "GC — 16级灰·全刷（与 GU 等价，保留）",
-      "DEEP GC — 16级灰·深度清理（多一次 DU 初始化，残影更彻底）",
-      "REGAL PLUS — 16级灰·低残影名（Poke6 实际 = GC16）",
-      "A2 — 无灰阶·5帧极速（动画/滚动；图标会丢灰阶）",
-      "DU — 黑白·22帧完整（无灰但内容完整）",
+      "None — 还原各 app 原配置（备份恢复）",
+      "NORMAL(0) — 系统默认（清 scope，GC16 族）",
+      "DU(1) — 2级黑白·22帧（实测 waveform1/22）",
+      "A2(2) — 无灰阶·5帧极速（实测 waveform6/5）",
+      "REGAL(3) — 低残影（Poke6 实测 = GC16 38帧）",
+      "X(4) — X 模式（AUTO+A2 组合）",
+      "REGAL_PLUS(5) — 16级灰·高质量",
   };
 
+  /** 档位值 = Onyx 逻辑 mode（直接用于 EAC refreshConfig.updateMode 写入） */
   private static final int[] MODE_VALUES = {
-      UI_NONE, UI_GU_MODE, UI_GC_MODE, UI_DEEP_GC_MODE, UI_REGAL_PLUS_MODE,
-      UI_A2_PERFORMANCE_MODE, UI_DU_MODE,
+      LM_NONE, LM_NORMAL, LM_DU, LM_A2, LM_REGAL, LM_X, LM_REGAL_PLUS,
   };
 
   private static final String VIEW_UPDATE_HELPER = "android.onyx.ViewUpdateHelper";
@@ -143,7 +154,7 @@ public class RefreshModeHelper {
     }
   }
 
-  /** 返回指定 index 的 UI 模式值（供 per-app 配置 JSON 使用）；越界返回 -1 */
+  /** 返回指定 index 的档位值（Onyx 逻辑 mode，供 per-app 配置 JSON 使用）；越界返回 -1 */
   public static int getModeValue(int index) {
     if (index < 0 || index >= MODE_VALUES.length) return -1;
     return MODE_VALUES[index];
@@ -170,7 +181,7 @@ public class RefreshModeHelper {
   }
 
   /**
-   * 双管齐下：scope 主通道（同步，同上）+ EAC per-app 配置兜底（后台）。
+   * 双管齐下：scope 主通道（同步，同上）+ EAC per-app 配置兜底（后台分批）。
    * 供设置面板手动切档调用。立即返回 scope 段结果；EAC 段在后台执行并 Toast 汇总。
    */
   public static boolean applyWithEac(int index) {
@@ -204,12 +215,13 @@ public class RefreshModeHelper {
       }
       int value = MODE_VALUES[index];
       String cmd;
-      if (value == UI_NONE) {
+      if (value == LM_NONE) {
         cmd = "restore";
         log("eac-fallback: restore per-app backups for " + pkgs.size() + " pkgs");
       } else {
         cmd = "set";
-        log("eac-fallback: unify " + pkgs.size() + " pkgs to NONE+updateMode=" + value);
+        log("eac-fallback: unify " + pkgs.size() + " pkgs to NONE+updateMode=" + value
+            + " (logic mode)");
       }
       int totalOk = 0;
       int totalSkip = 0;
@@ -221,7 +233,7 @@ public class RefreshModeHelper {
         String clazz = GlobalEacRefreshHelper.class.getName();
         String apk = appContext.getApplicationInfo().sourceDir;
         String shellCmd = "CLASSPATH=" + apk + " app_process /system/bin " + clazz
-            + " " + cmd + " " + csv + (value == UI_NONE ? "" : " " + value);
+            + " " + cmd + " " + csv + (value == LM_NONE ? "" : " " + value);
         log("eac-fallback: batch[" + from + "-" + (to - 1) + "] su -c " + shellCmd);
         String output = runRoot(shellCmd);
         log("eac-fallback: batch output:\n" + output);
@@ -334,15 +346,19 @@ public class RefreshModeHelper {
     }
   }
 
-  /** 只设 scope（在 byPass 暂停段内调用；此处不做全刷——暂停态发出的刷新不保证执行） */
+  /**
+   * 设 scope（在 byPass 暂停段内调用）：逻辑档经 toEpdMode 转 UI 值后 applyAppScopeUpdate(null)。
+   * None / NORMAL(0) → clearAppScopeUpdate（交系统默认，官方 mode 0 同款行为）。
+   */
   private static boolean doSetScope(int index) {
     try {
-      int value = MODE_VALUES[index];
-      if (value == UI_NONE) {
-        log("apply: clearing app scope");
+      int logic = MODE_VALUES[index];
+      if (logic <= LM_NORMAL) { // None(-1) / NORMAL(0)：清除 scope，交系统管理
+        log("apply: clearing app scope (logic=" + logic + ")");
         viewUpdateHelperClass.getMethod("clearAppScopeUpdate", boolean.class).invoke(null, true);
       } else {
-        log("apply: globalScope value=" + value);
+        int value = LOGIC_TO_SCOPE[logic];
+        log("apply: globalScope logic=" + logic + " -> ui=" + value);
         // 全局 scope（null 包名 = SurfaceFlinger 所有窗口，含第三方应用）
         viewUpdateHelperClass
             .getMethod("applyAppScopeUpdate", String.class, boolean.class, int.class, int.class, int.class)
