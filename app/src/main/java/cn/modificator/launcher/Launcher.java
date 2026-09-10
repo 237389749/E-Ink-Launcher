@@ -715,17 +715,13 @@ public class Launcher extends Activity
 
   /**
    * 一键切换到 Onyx 原始桌面（com.onyx/.StartupActivity）：
-   * 1) 先解冻/启用 com.onyx（该包常被 disable-user/冻结，禁用状态无法启动）
+   * 1) 判定 com.onyx 启用状态，未启用则直接启用（该包常为 DISABLED_USER 冻结态，禁用无法启动）
    * 2) 以显式组件 + CATEGORY_HOME 启动原始桌面（失败则 Toast 提示，不崩溃）
    * 自定义图标：E-ink_Launcher.OnyxHome.png
    */
   public void launchOnyxHome() {
-    // 1) 解冻（root；失败不阻塞后面尝试启动）
-    try {
-      Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", "pm enable com.onyx"});
-      p.waitFor();
-    } catch (Throwable ignored) {
-    }
+    // 1) 判定启用状态：未启用则直接启用
+    ensureOnyxHomeEnabled();
     // 2) 启动原始桌面
     Intent home = new Intent(Intent.ACTION_MAIN);
     home.addCategory(Intent.CATEGORY_HOME);
@@ -758,12 +754,33 @@ public class Launcher extends Activity
 
   /** 解冻并把 Onyx 原始桌面设为默认 HOME（root；卸载/停用前恢复用） */
   private void setOnyxHomeAsDefault() {
+    ensureOnyxHomeEnabled(); // 未启用则先启用
     try {
       Runtime.getRuntime().exec(new String[]{"su", "-c",
-          "pm enable com.onyx; cmd package set-home-activity com.onyx/.StartupActivity"}).waitFor();
+          "cmd package set-home-activity com.onyx/.StartupActivity"}).waitFor();
       Toast.makeText(this, "已将 Onyx 原始桌面设为默认桌面", Toast.LENGTH_SHORT).show();
     } catch (Throwable t) {
       Toast.makeText(this, "设置失败：" + t, Toast.LENGTH_SHORT).show();
+    }
+  }
+
+  /** 判定 com.onyx 是否已启用（未安装/查询失败返回 false） */
+  private boolean isOnyxHomeEnabled() {
+    try {
+      return getPackageManager().getApplicationInfo("com.onyx", 0).enabled;
+    } catch (PackageManager.NameNotFoundException e) {
+      return false;
+    }
+  }
+
+  /** 判定并确保 com.onyx 已启用：已启用则跳过；未启用则直接启用（root；失败静默） */
+  private void ensureOnyxHomeEnabled() {
+    if (isOnyxHomeEnabled()) {
+      return;
+    }
+    try {
+      Runtime.getRuntime().exec(new String[]{"su", "-c", "pm enable com.onyx"}).waitFor();
+    } catch (Throwable ignored) {
     }
   }
 

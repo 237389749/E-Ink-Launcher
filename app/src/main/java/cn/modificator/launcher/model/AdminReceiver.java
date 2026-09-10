@@ -29,20 +29,29 @@ public class AdminReceiver extends DeviceAdminReceiver {
 
   @Override
   public CharSequence onDisableRequested(Context context, Intent intent) {
-    restoreOnyxHome();
+    restoreOnyxHome(context);
     return "停用后已将默认桌面恢复为 Onyx 原始桌面（com.onyx），避免卸载后无桌面可用。";
   }
 
   @Override
   public void onDisabled(Context context, Intent intent) {
-    restoreOnyxHome();
+    restoreOnyxHome(context);
   }
 
-  /** 解冻并恢复默认 HOME 为 Onyx 原始桌面（root；失败静默） */
-  private void restoreOnyxHome() {
+  /**
+   * 解冻（判定：未启用才启用）并将默认 HOME 恢复为 Onyx 原始桌面（root；失败静默）
+   */
+  private void restoreOnyxHome(Context context) {
     try {
-      Runtime.getRuntime().exec(new String[]{"su", "-c",
-          "pm enable com.onyx; cmd package set-home-activity " + ONYX_HOME_COMPONENT}).waitFor();
+      boolean enabled;
+      try {
+        enabled = context.getPackageManager().getApplicationInfo("com.onyx", 0).enabled;
+      } catch (Throwable t) {
+        enabled = false;
+      }
+      String shellCmd = (enabled ? "" : "pm enable com.onyx; ")
+          + "cmd package set-home-activity " + ONYX_HOME_COMPONENT;
+      Runtime.getRuntime().exec(new String[]{"su", "-c", shellCmd}).waitFor();
     } catch (Throwable ignored) {
     }
   }
