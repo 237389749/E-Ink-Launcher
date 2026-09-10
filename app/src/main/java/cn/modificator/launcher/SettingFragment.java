@@ -167,27 +167,40 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
         .show();
   }
 
+  /** 手势编辑中的映射（跨对话框重建保持；保存/取消后清空并重新从文件读） */
+  private java.util.Map<String, String> gestureEditMap;
+
   /** 手势配置设置（root 写 systemui gestures_config + 重启 SystemUI；不含侧滑音量/亮度） */
   private void showGestureSettingsDialog() {
     if (!GestureConfigHelper.isRootAvailable()) {
       Toast.makeText(getActivity(), "需要 root 权限", Toast.LENGTH_SHORT).show();
       return;
     }
-    final java.util.Map<String, String> map = new java.util.LinkedHashMap<>();
-    final String[] labels = new String[GestureConfigHelper.POSITIONS.length];
-    String cur = GestureConfigHelper.load();
-    for (int i = 0; i < GestureConfigHelper.POSITIONS.length; i++) {
-      String pos = GestureConfigHelper.POSITIONS[i];
-      String action = "NONE";
-      if (cur != null) {
-        String key = "\"" + pos + "\":\"";
-        int idx = cur.indexOf(key);
-        if (idx >= 0) {
-          int end = cur.indexOf('"', idx + key.length());
-          if (end > idx) action = cur.substring(idx + key.length(), end);
+    final java.util.Map<String, String> map;
+    if (gestureEditMap != null) {
+      // 复用编辑中的状态：否则每次选完动作都会重新读文件，把刚做的选择覆盖掉（“改不了”）
+      map = gestureEditMap;
+    } else {
+      map = new java.util.LinkedHashMap<>();
+      String cur = GestureConfigHelper.load();
+      for (int i = 0; i < GestureConfigHelper.POSITIONS.length; i++) {
+        String pos = GestureConfigHelper.POSITIONS[i];
+        String action = "NONE";
+        if (cur != null) {
+          String key = "\"" + pos + "\":\"";
+          int idx = cur.indexOf(key);
+          if (idx >= 0) {
+            int end = cur.indexOf('"', idx + key.length());
+            if (end > idx) action = cur.substring(idx + key.length(), end);
+          }
         }
+        map.put(pos, action);
       }
-      map.put(pos, action);
+      gestureEditMap = map;
+    }
+    final String[] labels = new String[GestureConfigHelper.POSITIONS.length];
+    for (int i = 0; i < GestureConfigHelper.POSITIONS.length; i++) {
+      String action = map.get(GestureConfigHelper.POSITIONS[i]);
       labels[i] = GestureConfigHelper.POSITION_LABELS[i] + "  [" + actionLabel(action) + "]";
     }
     new AlertDialog.Builder(getActivity())
@@ -202,13 +215,25 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
           @Override
           public void onClick(DialogInterface d, int w) {
             if (GestureConfigHelper.save(map)) {
+              gestureEditMap = null;
               Toast.makeText(getActivity(), "手势已应用（SystemUI 重启中）", Toast.LENGTH_SHORT).show();
             } else {
               Toast.makeText(getActivity(), "保存失败（root/写入错误）", Toast.LENGTH_SHORT).show();
             }
           }
         })
-        .setNegativeButton(android.R.string.cancel, null)
+        .setNegativeButton(android.R.string.cancel, new DialogInterface.OnClickListener() {
+          @Override
+          public void onClick(DialogInterface d, int w) {
+            gestureEditMap = null;
+          }
+        })
+        .setOnCancelListener(new DialogInterface.OnCancelListener() {
+          @Override
+          public void onCancel(DialogInterface d) {
+            gestureEditMap = null;
+          }
+        })
         .show();
   }
 
