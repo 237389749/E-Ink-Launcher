@@ -14,14 +14,18 @@ import java.util.concurrent.TimeUnit;
 /**
  * root / su 调用统一入口。
  *
- * 根因（2026-09-10 实测）：Magisk 的 su 只存在于 /debug_ramdisk/su
- * （/system/bin/su、/system/xbin/su 均不存在），而 app 进程 PATH 不含 /debug_ramdisk，
- * 因此 {@code Runtime.exec(new String[]{"su", "-c", ...})} 抛 IOException
- * （"su: inaccessible or not found"）→ 所有 root 功能静默失败（手势设置读全空/保存报错等）。
+ * 背景（2026-09-10/11 实测）：Magisk 的 su 位置随安装方式变化——
+ *  - 旧布局：/debug_ramdisk/su（symlink→magisk）；
+ *  - Magisk 30.x 重装后：/product/bin/su（/product/bin 由 magisk 以 tmpfs 提供）。
+ * app 进程 PATH 虽常含 /product/bin，但 {@code Runtime.exec} **不查 PATH**，
+ * 因此必须用绝对路径探测，否则所有 root 功能静默失败（手势设置读全空/保存报错等）。
  *
- * 本类按优先级探测 su 的绝对路径并缓存；探测带超时保护（Magisk 授权弹窗未确认时
- * 不会挂死 UI 线程）。所有关键步骤写文件日志 {@code files/su_debug.log}
- * （root 可读：{@code adb shell su -c cat /data/data/cn.modificator.launcher/files/su_debug.log}）。
+ * 另：su 请求能否提权还取决于 Magisk 的授权表（/data/adb/magisk.db policies）；
+ * “彻底卸载 Magisk”会清空授权 → 所有 su 调用被拒（Permission denied），需在
+ * Magisk app 内重新授权。
+ *
+ * 本类按优先级探测 su 绝对路径并缓存；探测带超时保护（授权弹窗未确认时不挂死 UI）。
+ * 关键步骤写文件日志 {@code files/su_debug.log} 与 logcat（tag {@code SuHelper}）。
  */
 public final class SuHelper {
 
@@ -31,11 +35,14 @@ public final class SuHelper {
 
   /** 候选 su 路径（按优先级） */
   private static final String[] CANDIDATES = {
-      "/debug_ramdisk/su",   // Magisk（当前设备实测位置）
+      "/product/bin/su",     // Magisk 30.x 重装后（/product/bin 由 magisk tmpfs 提供）
+      "/debug_ramdisk/su",   // Magisk 旧布局（实测位置）
       "/system/bin/su",      // Magisk 老版本 / 其它 root
       "/system/xbin/su",
+      "/vendor/bin/su",
+      "/odm/bin/su",
       "/sbin/su",
-      "su",                  // PATH 回退（adb shell / 部分环境）
+      "su",                  // PATH 回退（注意：Java exec 不查 PATH，仅兜底）
   };
 
   private static File logDir;
