@@ -71,15 +71,19 @@ public final class SuHelper {
           }
         }
         Process p = Runtime.getRuntime().exec(new String[]{c, "-c", "id"});
+        StringBuilder out = new StringBuilder();
+        BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+        String ln;
+        while ((ln = r.readLine()) != null) out.append(ln);
         drain(p);
         boolean done = p.waitFor(TIMEOUT_SEC, TimeUnit.SECONDS);
         if (!done) {
           p.destroy();
-          log("probe " + c + " TIMEOUT (Magisk authorization not confirmed?)");
+          log("probe " + c + " TIMEOUT out=" + out);
           continue;
         }
         int rc = p.exitValue();
-        log("probe " + c + " rc=" + rc);
+        log("probe " + c + " rc=" + rc + " out=" + out);
         if (rc == 0) {
           resolved = c;
           break;
