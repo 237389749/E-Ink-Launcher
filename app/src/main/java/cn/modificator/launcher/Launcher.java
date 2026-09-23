@@ -139,6 +139,20 @@ public class Launcher extends Activity
     int refreshMode = config.getRefreshMode();
     if (refreshMode >= 0 && RefreshModeHelper.isAvailable()) {
       RefreshModeHelper.apply(refreshMode);
+      // EAC 定死为 REGAL(3)（ref.md §9.3.6）：启用防抖/周期 GC + 滚动瞬态，且其子路径模式
+      // 恒为 AUTO(GC16 38帧局部)，实测不卡。EAC 不随档位变化，避免切档批量写 app 引发
+      // 窗口风暴 → Watchdog 重启（§12.7）。
+      // official 调用会顺带设 per-app scope、覆盖全局 scope，故成功后重新应用全局档位。
+      // 放后台线程：su + app_process 较慢，不应阻塞启动。
+      final int mode = refreshMode;
+      new Thread(new Runnable() {
+        @Override
+        public void run() {
+          if (RefreshModeHelper.applyFixedEac()) {
+            RefreshModeHelper.apply(mode);
+          }
+        }
+      }, "fixed-eac").start();
     }
 
     // 冷启动首屏补一次刷新：图标/自定义图标可能尚未就绪，导致首屏部分图标不显示
