@@ -19,8 +19,8 @@ import java.util.Locale;
 /**
  * 墨水屏刷新模式切换 —— 仅 scope 通道（EAC 定死，不随档位写入）。
  *
- * 模式集（7 档，采用 **scope UI/EPD 值域**，见 {@link #SCOPE_VALUES}）：
- *   None / NORMAL（清 scope）+ DU(257) / DU_RAW(1) / X_DU(16777217) / REGAL(6) / REGAL_PLUS(9)
+ * 模式集（6 档，采用 **scope UI/EPD 值域**，见 {@link #SCOPE_VALUES}）：
+ *   None / NORMAL（清 scope）+ DU(257) / DU_RAW(1) / REGAL(6) / REGAL_PLUS(9)
  *
  * **仅保留 update[0]（局部刷新）族**（ref.md §9.3.4 / §9.3.5 全 18 模式实测矩阵）：
  * A2(2308) / X(16777220) 等 update[1]（全屏刷新）族在故障机必然触发 wait all_lut_free 超时
@@ -30,7 +30,7 @@ import java.util.Locale;
  * 1. scope（ViewUpdateHelper.applyAppScopeUpdate，null 包名 = 全局）是改变第三方 app 真实
  *    合成翻页波形的【唯一】有效主通道，且**接受任意 UI/EPD 值**（不经 EACUtils.toEpdMode）。
  * 2. EAC 通道的 updateMode 字段被 toEpdMode 硬归一化（非 0-5 → 5），承载不了
- *    257 / 16777217 等值；且切档批量写 12 个 app 会引发窗口重建风暴 → system_server WTF
+ *    257 等实测最优值；且切档批量写 12 个 app 会引发窗口重建风暴 → system_server WTF
  *    刷屏 → Watchdog 60s 重启（ref.md §12.7 实测撞上）。
  *    ⇒ **EAC 不随档位变**，由 {@link #applyFixedEac()} 一次性定死为 REGAL(3)
  *    （启用周期 GC + 滚动瞬态；其子路径模式恒为 toEpdMode(0)=AUTO=GC16 局部，实测安全）。
@@ -43,15 +43,17 @@ public class RefreshModeHelper {
   /**
    * 档位 → scope 通道 UI/EPD 值（-1 = 清 scope，交系统默认）。
    *
-   * 实测依据（ref.md §9.3.4 / §9.3.5 / §9.3.7，2026-09-23 全 18 模式矩阵）：
+   * 实测依据（ref.md §9.3.4 / §9.3.5 / §9.3.7 / §9.3.10，2026-09-23 全 18 模式矩阵）：
    * **仅保留 update[0]（局部刷新）族**；A2(2308)/X(16777220) 等 update[1]（全屏刷新）族
    * 在故障机必然触发 wait all_lut_free 超时 → reset → 卡顿（实测 reset 12/轮），已去除。
-   *   257      = DU | DITHER_MODE(0x100)：实测 GC16 38 帧**局部**（有灰阶、不卡）
-   *   1        = 裸 DU：实测 DU 22 帧局部（无灰阶）
-   *   16777217 = DITHER_X | DU：实测 DU 22 帧局部（无灰阶）
-   *   6 / 9    = REGAL / REGAL_PLUS：实测 GC16 38 帧局部
+   *   257 = DU | DITHER_MODE(0x100)：实测 GC16 38 帧**局部**（16 级灰、不卡）
+   *   1   = 裸 DU：实测 DU 22 帧局部（2 级黑白）
+   *   6 / 9 = REGAL / REGAL_PLUS：实测落 sg 槽 2（GC16 38 帧局部）
+   *
+   * ⚠️ 已弃用 `X_DU`(16777217 = DU | ONYX_AUTO(0x1000000))：实测波形与裸 `DU` **完全相同**
+   *   （同落 `waveform[1]`/22帧），那位无可见收益 —— 见 §9.3.10 ⑤。
    */
-  private static final int[] SCOPE_VALUES = {-1, -1, 257, 1, 16777217, 6, 9};
+  private static final int[] SCOPE_VALUES = {-1, -1, 257, 1, 6, 9};
 
   /** 可选模式集（仅局部刷新族；None/NORMAL = 清 scope） */
   public static final String[] MODE_NAMES = {
@@ -59,7 +61,6 @@ public class RefreshModeHelper {
       "NORMAL",
       "DU",
       "DU_RAW",
-      "X_DU",
       "REGAL",
       "REGAL_PLUS",
   };
@@ -67,9 +68,8 @@ public class RefreshModeHelper {
   public static final String[] LABELS = {
       "None — 还原各 app 原配置（备份恢复）",
       "NORMAL — 系统默认（清 scope）",
-      "DU — 有灰阶·38帧局部（DU+抖动）",
+      "DU — 有灰阶(16级)·38帧局部（DU+抖动）",
       "DU_RAW — 纯黑白·22帧局部（裸 DU）",
-      "X_DU — 纯黑白·22帧局部（X+DU）",
       "REGAL — 低残影·38帧局部",
       "REGAL_PLUS — 高质量·38帧局部",
   };
@@ -161,7 +161,7 @@ public class RefreshModeHelper {
    * 旧实现为"双管齐下"（scope + 遍历写 12 个第三方 app 的 EAC theme），实测会引发窗口重建
    * 风暴 → system_server WTF 刷屏 → Watchdog 60s 重启（ref.md §12.7 撞上；§9.3.6 定性）。
    * 且 EAC 的 updateMode 字段被 EACUtils.toEpdMode 归一化（非 0-5 → 5），无法承载
-   * 257 / 16777217 等实测最优值 —— 故切档与 EAC 解耦。
+   * 257 等实测最优值 —— 故切档与 EAC 解耦。
    */
   public static boolean applyWithEac(int index) {
     return apply(index);

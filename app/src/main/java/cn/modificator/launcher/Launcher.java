@@ -494,7 +494,7 @@ public class Launcher extends Activity
 
   /** per-app 刷新模式：经 scope 通道对该包名单独设置。
    *  scope 接受任意 UI/EPD 值，不受 EAC 逻辑域 toEpdMode 归一化限制，
-   *  故可表达 DU(257) / X_DU(16777217) 等实测最优档（ref.md §9.3.6）。 */
+   *  故可表达 DU(257，有灰阶) / DU_RAW(1) 等实测最优档（ref.md §9.3.6 / §9.3.10）。 */
   private boolean applyPerAppRefreshMode(String pkg, int modeIndex) {
     return RefreshModeHelper.applyPerApp(pkg, modeIndex);
   }
