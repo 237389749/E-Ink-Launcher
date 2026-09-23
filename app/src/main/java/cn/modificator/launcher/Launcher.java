@@ -478,51 +478,11 @@ public class Launcher extends Activity
         .show();
   }
 
-  /** 构造 EACAppTheme JSON（fastjson 反序列化所需字段，fastjson 缺失字段用构造器默认） */
-  private String buildPerAppThemeJson(String pkg, int modeValue) {
-    try {
-      org.json.JSONObject refresh = new org.json.JSONObject();
-      refresh.put("updateMode", modeValue);
-      refresh.put("enable", true);
-      refresh.put("gcInterval", 20);
-      org.json.JSONObject gac = new org.json.JSONObject();
-      gac.put("refreshConfig", refresh);
-      org.json.JSONObject appConfig = new org.json.JSONObject();
-      appConfig.put("pkgName", pkg);
-      appConfig.put("enable", true);
-      appConfig.put("globalActivityConfig", gac);
-      org.json.JSONObject theme = new org.json.JSONObject();
-      theme.put("pkg", pkg);
-      theme.put("name", pkg);
-      theme.put("alias", "refresh");
-      theme.put("themeType", 3);
-      theme.put("changed", true);
-      theme.put("appConfig", appConfig);
-      return theme.toString();
-    } catch (Exception e) {
-      return null;
-    }
-  }
-
-  /** 经 su + app_process 以 root 身份调 EInkHelper.applyEACAppTheme 写入系统 per-app 配置
-   *  （su 经 SuHelper 绝对路径解析） */
+  /** per-app 刷新模式：经 scope 通道对该包名单独设置。
+   *  scope 接受任意 UI/EPD 值，不受 EAC 逻辑域 toEpdMode 归一化限制，
+   *  故可表达 DU(257) / X_DU(16777217) 等实测最优档（ref.md §9.3.6）。 */
   private boolean applyPerAppRefreshMode(String pkg, int modeIndex) {
-    int modeValue = RefreshModeHelper.getModeValue(modeIndex);
-    if (modeValue < 0) return false;
-    String json = buildPerAppThemeJson(pkg, modeValue);
-    if (json == null) return false;
-    String b64 = android.util.Base64.encodeToString(json.getBytes(),
-        android.util.Base64.NO_WRAP);
-    String cmd = "CLASSPATH=" + getApplicationInfo().sourceDir
-        + " app_process /system/bin cn.modificator.launcher.PerAppRefreshHelper "
-        + pkg + " " + b64;
-    Process p = SuHelper.start(cmd);
-    if (p == null) return false;
-    try {
-      return p.waitFor() == 0;
-    } catch (Exception e) {
-      return false;
-    }
+    return RefreshModeHelper.applyPerApp(pkg, modeIndex);
   }
 
   // =========================================================================
