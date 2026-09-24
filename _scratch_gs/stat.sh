@@ -1,0 +1,10 @@
+#!/system/bin/sh
+echo "reset=$(dmesg | grep -c 'reset cause')"
+echo "pending=$(dmesg | grep -c 'pending_list(): magic')"
+echo "timeout=$(dmesg | grep -c 'all_lut_free timeout')"
+echo "powererr=$(dmesg | grep -c 'epdc power error')"
+echo "a2full=$(dmesg | grep -c 'waveform\[6\] update\[1\]')"
+echo "dufull=$(dmesg | grep -c 'waveform\[1\] update\[1\]')"
+echo "local0=$(dmesg | grep -c 'update\[0\]')"
+echo "local1=$(dmesg | grep -c 'update\[1\]')"
+echo "total=$(dmesg | wc -l)"
