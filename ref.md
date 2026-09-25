@@ -2515,6 +2515,13 @@ reset 周期 ~1.2s       （wait 1s + reset 0.1s + powerup 快失败）
 > │    故障机**必然 reset**（`update[1]`→`wait all_lut_free` 超时，与 A2 同路）  │
 > │    ⇒ 整屏清残影与避免 reset **物理不可兼得**，launcher 现状不应改动。        │
 > │                                                                          │
+> │ ★ **§9.3.25（2026-09-25 第三会话）「重叠」三维度判定**：                    │
+> │  · 「重叠」= **提交速率 > EPDC 执行速率**（一次翻页 8~9 次提交，间隔 25ms）   │
+> │  · **scope / EAC / A2 重排队三维度实测全部无效**（不是参数没调对）           │
+> │  · 根因 = **TPS6518x 供电成功率（随机）** 决定执行速率 ⇒ SF/上层改不了       │
+> │  · `setUpdListSize` 看似有效，**反转复验为假阳性**                        │
+> │  · 唯一稳定有效：**降低操作频率**（翻页间隔 >1.5s）                        │
+> │                                                                          │
 > │ 已被推翻的中间论断（详见各节"更正"）：                                    │
 > │  · "改重排队波形号/坐标可根治循环" → 作废（§9.3.18④/§9.3.19⑦）          │
 > │  · "A2 是 reset 的产物" → 循环论证错误（§9.3.18⑤）                       │
@@ -4932,6 +4939,162 @@ CLASSPATH=/data/local/tmp/repaint.dex app_process /system/bin io.onyx.RepaintAll
 | 设备端 `awk` 缺 `asorti`/`strftime` | `awk: calling undefined function` | 改用 `sort` + shell 循环 |
 | `d8.bat` 用绝对路径失败 | `Illegal char <:> at index 0` | 用**相对路径**调 d8 |
 | `javac` 默认 GBK | 中文注释报「非法字符」 | 加 `-encoding UTF-8` |
+
+---
+
+#### 9.3.25 ★★★ 第三会话：「等待刷新导致的重叠」在 scope / EAC / A2 三维度上的可行性判定（2026-09-25）
+
+> 起因：用户问「从 scope、eac、硬编码的 reset 后刷新模式 a2 三个维度考虑，现在的等待刷新导致的重叠问题还有办法解决吗」。
+> 设备：故障机 `6C7F0E64`，内核 v6-A2，scope=DU(1)。
+> **结论：三个维度【全部无效】，且不是"参数没调对" —— 根因不在 SF/上层，而在供电成功率。**
+
+**① 「重叠」的物理形态（本轮首次抓到直接证据）**
+
+用 `frame[a:b:c]` 高频采样（30ms）+ `epdc_active_luts` 观察「10 次快速翻页（间隔 0.35s）」：
+
+```
+SWIPE2 kt=37305.79 ┐
+SWIPE3 kt=37307.07 ├─ frame 几乎不动（停滞 1.6s）
+SWIPE4 kt=37308.37 ┘
+kt=37309.48 | frame +45 帧   ← 一次性刷出「三次翻页」的内容
+```
+
+⇒ **「重叠」= 提交速率 > EPDC 执行速率**：
+```
+一次翻页 → 8~9 次 EPDC 提交（实测间隔仅 25ms）
+连续快翻 → 提交快于执行 → epdc_active_luts 积压（实测峰值 0x7 ~ 0xf）
+         → 期间 frame 停滞
+         → powerup 偶然成功 → 一次性刷出 45~50 帧
+```
+
+**② 维度 1 — scope：❌ 无效**
+
+| 实验 | 结果 |
+|---|---|
+| DU(1) / GC16(2) / 98(GC16\|WAIT\|FULL) 各 8 次翻页 | **全部 reset=0、零 `update[1]`** |
+| DU / GC16 / DU2 各 10 次快翻 | 全部 `reset_delta=0`，但 luts 峰值均达 `0x7` |
+
+⇒ scope 只改**波形类型**，不改**提交速率**；三档的积压程度无差异。
+⇒ 附带复核：`scope=98`（带 FULL 位）实测 `update_mode` 仍 **=0** ⇒ **scope 通道 FULL 位不生效**（§9.3.24④ 再次确认）。
+
+**③ 维度 2 — EAC：❌ 无效**
+
+| 实验 | 结果 |
+|---|---|
+| `debouncer` OFF / ON(150,450,20) / ON(400,800,20) | 10 次快翻提交数 **92 / 84 / 88** —— 无显著差异 |
+| `debouncer` 的 `gcInterval` = 0 / 3 / 1 | **全部零 GC16 插入**、reset 均等于基线 |
+
+⇒ debouncer 只合并**同一帧内**的重绘，管不了翻页产生的**跨帧**提交。
+⇒ `gcInterval` 未能验证：**root 注入的 `input swipe` 不触发 EAC 的 `increaseRepaintCount`**
+   （§9.3.20 的计数入口在 app 进程的 accessibility 路径），故该维度在本轮**未获有效证据**。
+
+**④ 维度 3 — 内核硬编码 A2 重排队：⚪ 不参与**
+
+- 该 patch（`0x542B0C` / `0x5431AC` = `movz w0,#4`）只在 **reset 之后的重排队**路径生效；
+- 本轮实测：**局部刷新下 reset 全程为 0** ⇒ **这条路径根本没有被触发**；
+- 只有**全屏**（`update[1]`）才触发 reset（§9.3.24⑤：5 次全屏 GC16 中 3 次 reset），此时 A2 才起作用。
+- ⇒ 对「重叠」无影响；它仍是「reset 后恢复速度」的最优选择（A2 5 帧 vs GC16 38 帧）。
+
+**⑤ ★ 第四个维度（本轮新试）—— `setUpdListSize`：假阳性，不可复现**
+
+`ViewUpdateHelper.setUpdListSize(int)`（= SF 侧更新列表深度上限，默认 `-1`）看似是解药：
+
+| 轮次 | 配置 | maxLut | 最长停滞 | 每次推进刷出 |
+|---|---|---|---|---|
+| 首轮 | **default(-1)** | **15（满）** | **5.33s** | **50.5 帧** |
+| 首轮 | size=1 / 2 / 8 | **1** | 1.09 / 1.15 / 1.07s | 24 / 27 / 34 帧 |
+| **反转复验** | size=1 | 1 | **8.14s** | 37.4 帧 |
+| **反转复验** | default | 1 | 1.07s | 26.6 帧 |
+| **反转复验** | size=1 | 1 | 1.05s | 43.2 帧 |
+| **反转复验** | default | 1 | 1.09s | 34.1 帧 |
+
+⇒ **反转顺序后差异消失** ⇒ 首轮的「15 LUT / 5.33s」是**偶发假阳性**（powerup 恰好连续失败的随机窗口）。
+⇒ **`setUpdListSize` 不能可靠改善「重叠」。**
+
+**⑥ ★ 为什么是「无解」而非「参数没调对」**
+
+关键证据：**同一配置下积压深度随机**（`setUpdListSize=-1` 两轮分别测出 `maxLut=15/停滞5.33s` 与 `maxLut=1/停滞1.07s`）。
+因为 `powerup` 何时偶然成功是**硬件随机事件**，不构成可控节奏。
+
+⇒ **根因链**：
+```
+TPS6518x 供电成功率（硬件，随机）
+   → 决定 EPDC 执行速率
+   → 与上层提交速率（固定，8~9 次/翻页）比较
+   → 提交快于执行 = 积压 = 「重叠」
+```
+⇒ scope / EAC / A2 重排队**全都在 SF/上层**，**都改不了这个速率**。
+⇒ 与 §9.3.23⑰ 的结论一致（「换模式必然无效」），本轮给出了机制级解释。
+
+**⑦ 仍然可做的（按实测收益排序）**
+
+| # | 做法 | 效果 | 代价 |
+|---|---|---|---|
+| 1 | **降低操作频率**（翻页间隔 >1.5s） | ⭐ **实测唯一稳定有效** —— 提交速率降到执行速率以下，不再积压 | 慢一点 |
+| 2 | **减少独立刷新源** | 实测 idle 时 **每分钟 `:00.0x` 准点刷一次**（状态栏时钟）⇒ 关掉省 1 次/分钟提交 | 无时钟 |
+| 3 | ~~改 scope / EAC / A2 重排队~~ | ❌ 实测均无效（本文②③④）| — |
+| 4 | 修硬件（重插排线 / 换屏模组 / 修 TPS6518x 供电链） | **唯一根治** | 成本 |
+
+> ★ **反向观察（重要）**：本轮三档 × 10 次快翻、25 次连续翻页，**reset 全部为 0**。
+> ⇒ 当前配置（DU + EAC=3 + v6-A2 内核）**是相对稳定的**；「重叠」只在**快速连续翻页**时偶发出现，非常态。
+
+**⑧ 本轮新增/确认的 SDK 可调 API（源码级，均有反射可调用签名）**
+
+| API（`android.onyx.ViewUpdateHelper`） | 签名 | 语义 | 本轮结论 |
+|---|---|---|---|
+| `repaintEverything()` | `()` | 整屏按当前 scope 重画 | ❌ 不带 FULL 位（§9.3.24④）|
+| `repaintEverything(int)` | `(int mode)` | 整屏 + 指定 UI 值 | ✅ FULL 生效，但全屏必 reset |
+| **`mergeDisplayUpdate`** | `(int timeout, int mode)` | 按超时合并多次更新 | ❌ 对提交数无显著影响 |
+| **`mergeDisplayByCount`** | `(int count, int mode)` | 按次数合并 | ❌ 同上 |
+| **`debouncer`** | `(boolean enable, int mode, int shortDelay, int longDelay, int gcInterval)` | SF 防抖窗口 | ❌ 管不了跨帧提交 |
+| **`setUpdListSize`** | `(int size)` | SF 更新列表深度上限 | ❌ 假阳性（本文⑤）|
+
+关键常量：
+```
+firstUpdateMode                  = 98        (= GC16|WAIT|FULL，系统默认「首帧」模式)
+MERGE_UPDATE_MODE_BY_TIMEOUT     = 2097184   (= MERGE(2097152) | FULL(32))
+MERGE_UPDATE_MODE_BY_COUNT       = 2097185   (= MERGE | FULL | DU(1))
+DEFAULT_MERGE_DISPLAY_UPDATE_TIMEOUT = 200   (ms)
+DEFAULT_MERGE_DISPLAY_UPDATE_COUNT   = 50
+DEBOUNCER_UPDATE_MODE_MAP        = {3→0, 5→0, 0→0}   (EAC 逻辑 mode ∈ 此三者才启用 debouncer)
+EINK_WAIT_MODE_WAIT              = 64        (EINK_WAIT_MODE_MASK = 64)
+```
+
+**⑨ 本轮新增设备端工具（源码见 `_scratch_gs/probe_6/`）**
+
+```bash
+# 合并策略控制
+CLASSPATH=/data/local/tmp/merge.dex app_process /system/bin io.onyx.MergeCtl d            # dump 默认值
+CLASSPATH=/data/local/tmp/merge.dex app_process /system/bin io.onyx.MergeCtl t 200 2097184
+CLASSPATH=/data/local/tmp/merge.dex app_process /system/bin io.onyx.MergeCtl c 50 2097185
+
+# SF 防抖窗口
+CLASSPATH=/data/local/tmp/deb.dex app_process /system/bin io.onyx.DebCtl off
+CLASSPATH=/data/local/tmp/deb.dex app_process /system/bin io.onyx.DebCtl true 5 150 450 20
+
+# 更新列表深度（默认 -1）
+CLASSPATH=/data/local/tmp/upd.dex app_process /system/bin io.onyx.UpdListCtl reset
+CLASSPATH=/data/local/tmp/upd.dex app_process /system/bin io.onyx.UpdListCtl 1
+```
+
+**⑩ 观测方法补充（比 `dump_lut_list` 强）**
+
+```bash
+# ① 真实 SF→EPDC 提交流（含 waveform_mode / update_mode / Rect / flags）
+adb logcat -d | grep 'update_to_display'
+
+# ② 积压深度（第 4 个 LUT 槽的值 = 当前排队的 LUT 数）
+adb shell su -c "cat /sys/class/sepdc/debug/status"
+#   epdc_active_luts[0x0][0x0][0x0][0xN]   ← N 即积压深度（0~0xf 实测）
+```
+
+**⑪ 本轮工具教训（补充）**
+
+| 坑 | 现象 | 正确做法 |
+|---|---|---|
+| shell 变量包裹 `CLASSPATH=… app_process …` | `CLASSPATH=/data/local/tmp/x.dex: inaccessible or not found` | **不要**把整条命令塞进变量再展开；写全或分步 |
+| PowerShell 内联 shell `for`/`\$()` | `syntax error: unexpected 'do'`、`\$f` 被本地展开成 `C:\sys\...` | 整脚本 push 执行；或用逐条 `foreach` 调 adb |
+| 前台长时间 adb 脚本 | PowerShell timeout 打断 → 脚本中途 `Terminated`，**还原步骤可能未执行** | 长实验用 `su -c nohup sh … &` 后台跑，另起命令查看；**事后必须核对设备状态** |
 
 ### 8.1 方法
 - 工具：`_scratch_gs/relay_uc552930.py`（unicorn2 ARM64 模拟）+ `relay_uc_matrix.py`

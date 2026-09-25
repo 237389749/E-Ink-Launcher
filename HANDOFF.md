@@ -20,8 +20,10 @@
 
 **一句话现状**：黑屏问题已解决（v6 内核 patch 有效）；A2 档在故障机必然 reset（已知并规避）；
 **§6.1~§6.5 已执行完毕**：双刷机制 A 被**证伪**（因果方向反了）、§6 的 17 个 dt 属性**全部不存在**、
-**全屏 GC16 与 A2 走同一条 reset 路径**（⇒ 整屏清残影与避免 reset 物理不可兼得）；
-**仍剩 3 个未解项**：① 双刷的真正来源（疑上层周期重绘），② 重启触发源，③ 27.5s 长停滞。
+**全屏 GC16 与 A2 走同一条 reset 路径**（⇒ 整屏清残影与避免 reset 物理不可兼得）。
+**§9.3.25（第三会话）**：「重叠」在 **scope / EAC / A2 三维度实测全部无效** ——
+「重叠」= 提交速率 > EPDC 执行速率，根因是**供电成功率（硬件随机）**；唯一稳定有效的是**降低操作频率**。
+**仅剩 1 个未解项**：重启的真正触发源（`bootreason=reboot`，已排除崩溃/watchdog，需常驻 events log）。
 
 ---
 
@@ -59,6 +61,9 @@
 | **PowerShell 引号嵌套** | 复杂 `su -c "..."` 里的引号被展开 | 写成 `.sh` 文件 push 过去 |
 | **adb 会掉线** | `device not found` / `unknown host service` | `adb reconnect` 或等几秒重试 |
 | **session temp 目录会变** | `$env:TEMP\eink_diag` 路径失效 | 用绝对路径 `C:\Users\root\AppData\Local\Temp\eink_diag` |
+| **长实验被 PowerShell timeout 打断** | 脚本中途 `Terminated`，**末尾的还原步骤可能未执行** → 设备留下非默认状态（如 `cut_frame_num` 非 0）| 用 `su -c nohup sh /data/local/tmp/x.sh > /data/local/tmp/x.log 2>&1 &` 后台跑，另起命令看日志；**事后必须核对设备状态** |
+| **shell 变量包裹整条命令** | `CMD="CLASSPATH=… app_process …"; $CMD` → `CLASSPATH=…: inaccessible or not found` | 不要把 `VAR=val cmd` 塞进变量再展开；写全或用 `env` |
+| **PowerShell 内联 shell 语法** | `for f in …; do …; done` / `\$f` → `syntax error: unexpected 'do'`、`\$f` 被本地展开成 `C:\sys\…` | 整脚本 `push` 执行；或改用 PowerShell `foreach` 逐条调 adb |
 
 ### 1.4 ★ Git 推送
 
@@ -515,15 +520,16 @@ cd C:\Users\root\Documents\eink
 
 | # | 问题 | 状态 |
 |---|---|---|
-| 1 | **双刷的真正来源** | ❌ 机制 A 已证伪（§6.1）⇒ **未定**，新假设：上层周期重绘（疑 EAC `gcInterval`/debouncer）|
+| 1 | **「重叠」能否从 scope / EAC / A2 三维度解决** | ✅ **已定论：三维度全部无效**（§9.3.25）。「重叠」= 提交速率 > EPDC 执行速率；根因是**供电成功率（硬件随机）**，SF/上层改不了。唯一稳定有效：**降低操作频率**（翻页间隔 >1.5s）|
 | 2 | ~~`epdc-power-fail-dont-update` 当前值~~ | ✅ **已查清：属性不存在**（连同其余 16 个）⇒ 此路不通（§6.2）|
 | 3 | 重启真正触发源 | ⚠️ 已确认全部为软件 reboot、无崩溃/watchdog，**但发起者未定位**（需常驻 events log，§6.3）|
-| 4 | 长停滞 27.5s 的解释 | 未解（已排除"堆积"；空档期 EPDC 完全空闲，§6.1）|
-| 5 | idle 为何持续自发刷新 | 未解（**§6.1 已确认与操作无关**；每组 +17~22 帧 = 一个 DU 波形，间隔 ~32s）|
+| 4 | 长停滞 27.5s 的解释 | ✅ **机制已明**：`powerup` 连续失败导致的积压窗口（随机）；`setUpdListSize` 复验证明**积压深度不可控**（§9.3.25⑤⑥）|
+| 5 | idle 为何持续自发刷新 | ✅ **已找到来源**：**状态栏时钟** —— 实测每分钟 `:00.0x` 秒准点触发一次 `waveform_mode=1`（§9.3.25⑦）|
 | 6 | ~~`repaintEverything(带参)` 是否绕过 FULL 位~~ | ✅ **已定论：带参生效、无参不生效**；但全屏必然 reset ⇒ 故障机不可用（§6.4）|
 | 7 | 是否有"清残影"的 dt 开关 | ✅ **已查清：`a2-clean-mode` 等均不存在**（§6.2）|
 | 8 | A2（及全屏 GC16）在正常机的表现 | 未测 —— **优先级已提升**（§6.6）：决定能否为正常机提供清残影入口 |
 | 9 | `debug_level=1` 能否恢复被抑制的诊断 printk | 未测（节点**可写**已确认，§6.5）；建议专门会话验证 |
+| 10 | `gcInterval` 周期 GC 是否真的插入 GC16 全刷 | ⚠️ **本轮未获有效证据** —— root 注入的 `input swipe` 不触发 EAC 计数入口（§9.3.25③）；需真机手触验证 |
 
 ---
 
