@@ -2,6 +2,7 @@
 
 > 生成时间：2026-09-25 · 面向下一个会话/接力的 LLM 或工程师
 > **先读本文，再按需查 `ref.md`（5684 行完整日志）与 `WAVEFORM_TO_DISPLAY.md`（15 KB 提炼版）**
+> **★ 2026-09-25 第二会话已执行 §6.1~§6.5 并推翻 3 条旧结论 —— 见 §4.6、§6、`ref.md` §9.3.24**
 
 ---
 
@@ -12,13 +13,15 @@
 | **项目** | BOOX Poke6 墨水屏刷新机制逆向 + launcher 刷新档位改造 |
 | **设备** | 故障机 `6C7F0E64`（Poke6，TPS6518x 供电故障）；正常机 `6C1BF7D9` |
 | **仓库** | `E-Ink-Launcher`，分支 `v0.x`，root = `C:\Users\root\Documents\eink\E-Ink-Launcher` |
-| **当前提交** | `fc516ca`（已推送）|
-| **设备当前档位** | `launcherRefreshMode=2` = **GC16**（局部族，安全）|
+| **当前提交** | `4effadb`（已推送）|
+| **设备当前档位** | prefs `launcherRefreshMode=2` ⇒ `SCOPE_VALUES[2]=1` = **DU**（⚠️ 见 §3.2 索引语义）|
 | **设备当前内核** | v6-A2 patched（`#79 Mon Mar 16 18:22:03`），刷在 `boot_b`，槽位 `_b` |
 | **工作区根** | `C:\Users\root\Documents\eink`（`ref.md` 在此，**不在 git 仓库内**）|
 
 **一句话现状**：黑屏问题已解决（v6 内核 patch 有效）；A2 档在故障机必然 reset（已知并规避）；
-**当前未解的两件事是硬件供电故障的两个表现** —— ① 刷新"停滞→突增"（双刷），② 偶发重启。
+**§6.1~§6.5 已执行完毕**：双刷机制 A 被**证伪**（因果方向反了）、§6 的 17 个 dt 属性**全部不存在**、
+**全屏 GC16 与 A2 走同一条 reset 路径**（⇒ 整屏清残影与避免 reset 物理不可兼得）；
+**仍剩 3 个未解项**：① 双刷的真正来源（疑上层周期重绘），② 重启触发源，③ 27.5s 长停滞。
 
 ---
 
@@ -106,14 +109,20 @@ uptime  = ~32700 s（约 9 小时，未重启）
 
 | 项 | 值 |
 |---|---|
-| `launcherRefreshMode` | **2** → 新表 index 2 = **DU** ⚠️ 见下方更正 |
+| `launcherRefreshMode` | **2** → 新表 index 2 = **DU(1)**（2026-09-25 实测确认生效值）|
 | `EAC` 逻辑值 | 定死为 **3 (REGAL)**，由 `applyFixedEac()` 在 launcher 启动时写入 |
 | scope（运行时） | 由 launcher `apply()` 设置 |
 
-> ⚠️ **注意索引语义**：`SCOPE_VALUES = {-1, -1, 1, 2, 4, 2312}`
-> `MODE_NAMES = {None, NORMAL, DU, GC16, A2, DU4}`
-> ⇒ **index 2 = DU，index 3 = GC16**。prefs 最后写入的是 `globalScope DU -> ui=1`（见 refresh_mode.log），
-> 故**实际生效的是 DU(1)**。判断实际生效请用 `fastModeIndex` + 实测波形，**不要只看 prefs**。
+> ⚠️ **★ 索引语义（务必按这个读）**：
+> ```
+> SCOPE_VALUES = {-1, -1, 1, 2, 4, 2312}
+> MODE_NAMES   = {None, NORMAL, DU, GC16, A2, DU4}
+>                              ↑index2      ↑index3
+> ```
+> ⇒ **index 2 = DU，index 3 = GC16**（§0 速览表旧版「index 2 = GC16」是**错的**，已更正）。
+> 实测证据（2026-09-25 第二会话）：`refresh_mode.log` 末次切档为 `apply: globalScope DU -> ui=1`，
+> 且 `logcat | grep update_to_display` 显示 `waveform_mode = 1`（= DU）⇒ **实际生效 = DU**。
+> **判断实际生效档位请用 `fastModeIndex` + 实测波形（`update_to_display` 日志），不要只看 prefs。**
 
 ### 3.3 健康指标（20 s 窗口）
 
@@ -225,6 +234,9 @@ TPS6518x 供电芯片故障
 
 ### 4.6 ★ 两个未解现象（都源于硬件）
 
+> ⚠️ **本节 2026-09-25 第二会话【重大修正】** —— 现象 A 的原机制推断已被**证伪**，
+> 详见 §4.6.A 与 `ref.md` §9.3.24①。
+
 #### 现象 A：刷新"停滞 → 突增"（用户称"一次性刷新两次/双刷"）
 
 **实测数据**（20 ms 采样 `frame[]`）：
@@ -233,15 +245,20 @@ TPS6518x 供电芯片故障
 不操作:    0~380ms +38帧 → 停 2.0s → 2380ms +36帧
 停 launcher: 仍有同样模式（已 force-stop 验证）
 ```
-**已排除**：launcher、刷新模式、用户操作 —— **全部无关**。
-**机制推断（A，倾向成立）**：`powerup 重试周期`驱动
-```
-一个 GC16 需 38 帧 → 需 1 次成功 powerup
-失败→重试 2 次（各 1.7s）→ 轮间停 4~5s
-成功的轮次 = 执行 38 帧 = frame +36~38
-```
-**待验证**：前后两份数据时间尺度吻合，但**尚未抓到最后一步直接对应**（需在同一窗口同时抓
- `Reg Enable` 时间戳与 frame 跃变）。
+**已排除**：launcher、刷新模式、用户操作 —— **全部无关**（这三条仍然成立）。
+
+**★ 原机制 A（「双刷 = powerup 重试周期」）—— 【已证伪】**：
+
+| 证据 | 数据 | 结论 |
+|---|---|---|
+| 时序方向 | `Reg Enable` 全部出现在 frame 推进段**开始之后**（lag +0.01 ~ +10.43s） | ❌ 不是「powerup 驱动刷新」，而是**「刷新触发 powerup」** |
+| `pending_cnt` | `=2` 占 3.2~3.7% 采样，与推进段逐段对齐，末期回 0 | ❌ **不是"堆积"**，是双缓冲流水线正常态 |
+| idle vs 操作 | 纯 idle 60s 内 3 组自发刷新（`+19~22` 帧/0.3s）；swipe 后 1 组**幅度相同** | ❌ 二者**无差别** |
+| 空档期 | `epdc_active_luts` 归零，两组间零 reset / power error | **EPDC 完全空闲** |
+
+⇒ **真正的双刷机制未定**。每组 `+17~22` 帧 = 一个 **DU 波形**（不是 GC16 的 38）。
+⇒ **新假设（未验证）**：**上层（SF / Onyx 框架）周期性自发提交同幅刷新**。
+   下一步应查：EAC 的 `gcInterval`（输入计数触发，§9.3.20）/ debouncer / 系统时钟重绘源。
 
 #### 现象 B：偶发重启
 
@@ -300,67 +317,74 @@ private static final int FIXED_EAC_LOGIC = 3;                        // L181
 
 ## 6. ★ 下一步候选任务（按价值排序）
 
-### 6.1 验证现象 A 的机制（推荐先做，成本低）
+> **★ 2026-09-25 第二会话已执行 §6.1~§6.5** —— 结果速览（详见 `ref.md` §9.3.24）：
+>
+> | 项 | 结果 |
+> |---|---|
+> | §6.1 双刷机制 | ❌ **机制 A 证伪**（因果方向反了）；真正来源未定，疑上层周期重绘 |
+> | §6.2 dt 属性 | ❌ **17 个属性全不存在**（仅 `epdc-waveform-load-delay`）⇒ 无此缓解点 |
+> | §6.3 重启触发源 | ⚠️ 确认**全部为软件 reboot、无崩溃/ANR/watchdog**；**发起者仍未定位** |
+> | §6.4 清残影入口 | ✅ **FULL 位在带参 `repaintEverything` 上生效**，但**全屏必然 reset** ⇒ 不可取 |
+> | §6.5 可写节点 | ✅ 4 个全可写（**含 `debug_level`**，修正旧记录）|
 
-**目标**：确认"双刷"= powerup 重试周期
+### 6.1 ① 双刷的真正来源（★ 优先级最高，已有明确方向）
+
+**已排除**：launcher / 刷新模式 / 用户操作 / powerup 重试（机制 A 证伪）。
+**新假设**：上层（SF / Onyx 框架）**周期性自发提交同幅刷新**（每组 `+17~22` 帧 = 一个 DU 波形，间隔 ~32s）。
+
 **方法**：
-1. 先导 dmesg：`adb shell su -c "dmesg > /data/local/tmp/dm.txt"`
-2. 同时后台采样 frame：`sh /data/local/tmp/fts.sh 1200`（带 `/proc/uptime` 时间戳）
-3. 离线对齐两份数据（同一 `kt` 时钟）
-4. **判据**：每次 frame 跃变前 ~1.7s 应有 `Reg Enable`
+1. 用 `logcat -d | grep update_to_display`（**新手段，不受 dmesg 淹没影响**）统计 idle 期间的
+   `waveform_mode` / `update_mode` 分布与**时间间隔**
+2. 结合 `/sys/class/sepdc/debug/status` 的 `frame[a:b:c]` 对齐（注意 `K ≈ 27687.6` 基准标定）
+3. 判据：idle 期间是否**周期性**出现同幅 `update_to_display`
+4. 若成立 → 查 EAC `gcInterval`（§9.3.20 输入计数触发）/ debouncer / 时钟重绘
 
-**注意**：脚本内 `dmesg` 会失败，必须用 adb 先导出。
+### 6.2 ~~验证 `epdc-power-fail-dont-update`~~ —— ❌ **已作废**
 
-### 6.2 验证 `epdc-power-fail-dont-update`（★ 最有价值的软件缓解点）
+该属性**在设备树中不存在**（连同其余 16 个），内核 `of_property_read_*` 全部返回失败。
+**无「现成开关」可改**。若仍要尝试，需在 `dtbo` 中**新增**属性并确认内核有对应字段存储 ——
+**优先级应大幅下调**（它是未实现的接口，不是关掉的开关）。
 
-**发现**：内核 `onyx_epdc_parse_dt` 解析以下 dt 属性（反汇编 `0x53f7c0` 区域挖出）：
+### 6.3 查重启触发源（⚠️ 仍未定位，需部署常驻监听）
 
-| 属性名 | 推测作用 |
+**已确认**：`bootreason` 全部为 `reboot`（软件），**无** crash / ANR / native_crash / watchdog。
+`persist.sys.boot.reason.history` 显示 2 次 `shell` 发起 + 2 次无前缀（= system_server/init）。
+
+**问题**：`logcat -b events` buffer 仅约 40 分钟，**不足以覆盖重启时刻**。
+**方法**：
+1. **部署常驻落盘**：`logcat -b events -v time > /data/local/tmp/events.log &`（建议开机自启）
+2. 重启后查 `reboot_requested` / `boot_progress` 的**发起进程**
+3. 同时对齐 WTF 时间戳（WTF 与重启**无因果**已确认，但可作旁证）
+
+### 6.4 ~~评估「手动全屏清残影」入口~~ —— ✅ **已定论，不可取（故障机）**
+
+| 方案 | 裁决 |
 |---|---|
-| **`epdc-power-fail-dont-update`** | ★ **供电失败时不更新**（若为 0 → 失败也照刷，**可能正是双刷来源**）|
-| `epdc-init-mode-force-disable` | 强制禁用 init 模式 |
-| `epdc-panel-v3p3-always-on` | 面板 v3p3 常开 |
-| `panel-pwrdown-delay` / `panel-pwrdown-wait` | 掉电延迟/等待 |
-| **`a2-clean-mode` / `a2_frame_num`** | ★ A2 清残影模式与帧数 |
-| `cut-frame-fill-zero` / `power-timeout-deteck` | 截帧填充 / 供电超时检测 |
-| `temp-deteck-enable` / `temp-deteck-from-pmic` | 温度检测 |
-| `dither-set-disable` / `epdc-gu-regal-enable` | dither / GU REGAL |
-| `cfa_mode` / `sf-rotation` / `temp-diff` | CFA/旋转/温差阈值 |
+| 调**无参** `repaintEverything()` | ✅ 安全但**无效**（实测不带 FULL 位，清不了整屏残影）|
+| 调**带参** `repaintEverything(98)` | ⚠️ **有效但会 reset**（实测 5 次中 3 次）；**正常机可考虑** |
+| 档位表加 98/108 | ❌ 无效（**scope 通道** FULL 位不生效）|
+| 周期性自动全刷 | ❌ 周期性闪烁 **+ 周期性 reset** |
 
-**关键**：这些由内核从**设备树**读取（`bl #0xaecf58` = `of_property_read_*`），
-**属性不存在则功能关闭** ⇒ **要改需改 dtb，不是 sysfs**。
+```
+⇒ ★ 净结论：故障机上「整屏清残影」与「避免 reset」物理不可兼得 ——
+   整屏清残影必须 update[1] 全屏，而全屏必然 wait all_lut_free 超时。
+⇒ launcher 现状（无参 repaint，局部重画）恰是故障机唯一安全选择，【不应改动】。
+```
 
-**任务**：找到 dtb 中 EPDC 节点 → 确认这些属性的当前值 → 评估改 `epdc-power-fail-dont-update` 的效果。
+### 6.5 ~~试其余可写节点~~ —— ✅ **已完成**
 
-### 6.3 查重启触发源（现象 B）
+`cut_frame_num` / `update_disable` / `time_test_level` / **`debug_level`** 四个节点**均可写**（写回原值 rc=0）。
 
-**方法**：
-1. `logcat -b events -d | grep -iE "watchdog|reboot|boot_progress"`
-2. `/data/system/dropbox/` 里 WTF 时间戳与 `am_`/`wm_` 事件对齐
-3. 盯下一次 WTF 爆发窗口（历史：09-24 23:50 / 09-25 00:10）
+> ⚠️ **`debug_level` 可写是重要新发现**（旧记录称"写入被拒"）：写 1 可恢复
+> `SET_EBC_SEND_UPDATE` 等被抑制的 printk，**便于诊断**。但会加剧 dmesg 压力
+> （当前已被 `dump_lcdc_state` 淹没）—— 建议在**专门诊断会话**中启用，勿长期打开。
 
-### 6.4 评估"手动全屏清残影"入口
+### 6.6 正常机验证（`6C1BF7D9`）—— **优先级提升（因 §6.4 结论）**
 
-**背景**：`repaintEverything()` 是唯一整屏清残影手段，launcher 仅切档时调一次。
-**可选**：加手动入口（低风险）或周期性自动全刷（会周期性闪烁，中风险）。
-⚠️ `repaintEverything(98)` 带参版是否绕过 FULL 位限制**未验证**。
-
-### 6.5 试其余可写节点（低优先级）
-
-| 节点 | 权限 | 状态 |
-|---|---|---|
-| `cut_frame_num` | `-rw-r--r--` | 未测（当前 0）|
-| `update_disable` | `-rw-r--r--` | 未测（当前 0）|
-| `submit_upd_work` | `--w-------` | 未测 |
-| `night_mode` | `--w-------` | 未测 |
-| `debug_level` | `-rw-r--r--` | ⚠️ 实测写入被拒 |
-| `reset_test` | `--w-------` | ⚠️ **实测被 SELinux 拒**，不可用 |
-| `panel_clean` / `panel_init` / `panel_last` | `-r--r--r--` | **只读**（值恒 `ok`），**非命令节点** |
-
-### 6.6 正常机验证（`6C1BF7D9`）
-
-- A2/DU4 在正常机的表现（应无 reset 循环）
+- **A2 / 全屏 GC16 在正常机是否无 reset**（§6.4 已证全屏 GC16 在故障机必然 reset；
+  正常机应无此问题 ⇒ 可安全提供"清残影"入口）
 - `scrollingRefreshMode` 混合来源（未验证）
+- 验证**无参 vs 带参** `repaintEverything` 在正常机的差异（应都干净）
 
 ---
 
@@ -426,7 +450,10 @@ adb shell su -c "grep -m1 TerribleFailure /data/system/dropbox/system_server_wtf
 | 波形物理规格（覆盖/驱动率/同色态）| 独立解析 + 全 8 项吻合 | **高** |
 | 模式→槽→update 映射 | 设备受控实测，**6/6 复现** | **高** |
 | "可区分灰阶" | **自建指标**（定义见 WAVEFORM_TO_DISPLAY §2.1）| ⚠️ **仅横向对比** |
-| 双刷机制 | 三组对照实验（含 force-stop launcher）| **中**（机制未最终闭环）|
+| 双刷机制 | 三组对照实验 + 时序对齐（含 force-stop launcher）| **高**（机制 A 已**证伪**，见 §4.6；真正来源未定）|
+| §6.4 FULL 位 | SDM `update_to_display` 日志逐项对照 + 5 次重复 | **高**（每条单独触发、`logcat -c` 后观测）|
+| §6.2 dt 属性 | 全树遍历 `/sys/firmware/devicetree/base` | **高**（穷举 17 个名字 + 宽通配复核）|
+| §6.3 重启类型 | `persist.sys.boot.reason.history` + dropbox 分类计数 | **高**（类型确定）；**低**（触发源未定）|
 | 重启触发源 | WTF 时间线分析（否定 Watchdog 假说）| **低**（触发源未定）|
 
 ### ★ 已知数据陷阱（勿重复踩）
@@ -488,14 +515,15 @@ cd C:\Users\root\Documents\eink
 
 | # | 问题 | 状态 |
 |---|---|---|
-| 1 | 双刷机制是否确为 powerup 重试 | 待最后一步验证（§6.1）|
-| 2 | `epdc-power-fail-dont-update` 当前值 | 未查（§6.2）★ 最有价值 |
-| 3 | 重启真正触发源 | 未定（§6.3）|
-| 4 | 长停滞 27.5s 的解释 | 未解（可能多轮连续失败）|
-| 5 | idle 为何持续刷 38 帧 | 未解（疑系统周期性重绘）|
-| 6 | `repaintEverything(带参)` 是否绕过 FULL 位 | 未验证 |
-| 7 | 是否有"清残影"的 dt 开关 | `a2-clean-mode` 待查 |
-| 8 | A2/DU4 在正常机的表现 | 未测（正常机 `6C1BF7D9`）|
+| 1 | **双刷的真正来源** | ❌ 机制 A 已证伪（§6.1）⇒ **未定**，新假设：上层周期重绘（疑 EAC `gcInterval`/debouncer）|
+| 2 | ~~`epdc-power-fail-dont-update` 当前值~~ | ✅ **已查清：属性不存在**（连同其余 16 个）⇒ 此路不通（§6.2）|
+| 3 | 重启真正触发源 | ⚠️ 已确认全部为软件 reboot、无崩溃/watchdog，**但发起者未定位**（需常驻 events log，§6.3）|
+| 4 | 长停滞 27.5s 的解释 | 未解（已排除"堆积"；空档期 EPDC 完全空闲，§6.1）|
+| 5 | idle 为何持续自发刷新 | 未解（**§6.1 已确认与操作无关**；每组 +17~22 帧 = 一个 DU 波形，间隔 ~32s）|
+| 6 | ~~`repaintEverything(带参)` 是否绕过 FULL 位~~ | ✅ **已定论：带参生效、无参不生效**；但全屏必然 reset ⇒ 故障机不可用（§6.4）|
+| 7 | 是否有"清残影"的 dt 开关 | ✅ **已查清：`a2-clean-mode` 等均不存在**（§6.2）|
+| 8 | A2（及全屏 GC16）在正常机的表现 | 未测 —— **优先级已提升**（§6.6）：决定能否为正常机提供清残影入口 |
+| 9 | `debug_level=1` 能否恢复被抑制的诊断 printk | 未测（节点**可写**已确认，§6.5）；建议专门会话验证 |
 
 ---
 

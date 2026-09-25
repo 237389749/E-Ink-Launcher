@@ -2488,11 +2488,11 @@ reset 周期 ~1.2s       （wait 1s + reset 0.1s + powerup 快失败）
 ### 9.3 v6：reset 重排队波形 GC16 → DU（2026-09-23，**已刷入 boot_b 并实测有效**）
 
 > ┌──────────────────────────────────────────────────────────────────────────┐
-> │ **★ 本节导读（2026-09-24 更新，先读这里）**                                │
+> │ **本节导读（2026-09-25 更新，先读这里）**                                │
 > │                                                                          │
 > │ 本节按时间顺序记录了 v5 → v6-DU → v6-A2 三代内核 patch 的完整探索。       │
-> │ **最优结论在 §9.3.17/§9.3.18/§9.3.19**，前面章节的中间推断有多处后来被     │
-> │ 推翻，阅读时请以 §§9.3.17~19 为准。关键三条：                            │
+> │ **最优结论在 §9.3.17~§9.3.21**，前面章节的中间推断有多处后来被             │
+> │ 推翻，阅读时请以 §§9.3.17~21 为准。关键四条：                            │
 > │                                                                          │
 > │ 1. **v6-A2 内核（当前 boot_b）= 最终形态**，黑屏已解决，勿回退。          │
 > │ 2. **A2 档（scope=4）在故障机必然 reset 循环** —— 根源是 native 依        │
@@ -2500,11 +2500,26 @@ reset 周期 ~1.2s       （wait 1s + reset 0.1s + powerup 快失败）
 > │    `wait all_lut_free` 超时。**kernel 与 launcher 均无法改**。            │
 > │ 3. **规避方式：不选 A2 档即可**（实验证明 DU/GC16/NORMAL 全绿）。         │
 > │    用户已决定：档位表保留 6 档现状，EAC 与 kernel 均不改动。               │
+> │ 4. **残影问题（§9.3.21）**：只有 GC16 族清残影（同色态驱动率 0.23）；      │
+> │    DU/A2/DU4 是差分模式（0.009~0.06）不清残影。且 **scope 通道 FULL 位      │
+> │    不生效** ⇒ 连 GC16 都只清"变化区域"；整屏清残影只有                   │
+> │    `repaintEverything()`，而 launcher 仅在切档时调一次。                  │
+> │                                                                          │
+> │ ★ **§9.3.24（2026-09-25 第二会话）追加三条重要修正**：                    │
+> │  · **双刷机制 A 证伪**：`Reg Enable` 在 frame 推进段【之后】(非其前)，       │
+> │    因果方向相反；`pending_cnt=2` 是双缓冲正常基线、非堆积。                │
+> │  · **§6 的 17 个 dt 属性【全部不存在】**（仅 `epdc-waveform-load-delay`）   │
+> │    ⇒「改 dtb 开 `epdc-power-fail-dont-update`」路径不成立。               │
+> │  · **FULL 位修正**：**scope 通道**不生效（旧结论对）；但                     │
+> │    **`repaintEverything(值)` 带参通道 FULL 【生效】**。但全屏 GC16 在        │
+> │    故障机**必然 reset**（`update[1]`→`wait all_lut_free` 超时，与 A2 同路）  │
+> │    ⇒ 整屏清残影与避免 reset **物理不可兼得**，launcher 现状不应改动。        │
 > │                                                                          │
 > │ 已被推翻的中间论断（详见各节"更正"）：                                    │
 > │  · "改重排队波形号/坐标可根治循环" → 作废（§9.3.18④/§9.3.19⑦）          │
 > │  · "A2 是 reset 的产物" → 循环论证错误（§9.3.18⑤）                       │
 > │  · "`appScopeRefreshMode` 可判档位" → 该读数恒为默认 2，不可信（§9.3.17③）│
+> │  · "设 98/108 即可全屏清残影" → 不成立，FULL 位在 scope 通道无效（§9.3.21④）│
 > └──────────────────────────────────────────────────────────────────────────┘
 
 > 起因：故障机出现**新失效模式 —— 大面积变黑**（USB 投屏内容正常，仅面板黑）。
@@ -4116,6 +4131,807 @@ TabletEACRefreshImpl:188
 - ✅ 参考：正常机与故障机 wbf **逐字节相同**（见 7.3 修正；此前"md5 58c1… 不同"为拉取 CRLF 污染假象）
 
 ## 8. ★ wbf 静态逆向突破（2026-09-05 晚，unicorn 模拟执行 0x552930）
+
+#### 9.3.21 ★★★ 残影机制全解：清残影 = 全摆动，只有 GC16 族具备（2026-09-25）
+
+> 起因：用户观察"现在刷新残影多，我觉得是因为没有选择清除残影的模式？"
+> **结论：用户判断基本正确 —— 4 个波形档里只有 GC16 具备清残影能力；DU/A2/DU4 都是差分
+> 模式，不清残影。但还有更深一层：scope 通道的 `FULL` 位不生效，导致连 GC16 也只能
+> 清"变化区域"，无法清理整屏残影。**
+
+**① 全部模式的「基础波形 + 位命令」分解表（`UI 值 = 波形号 | 标志位`）**
+
+低位掩码 `EINK_WAVEFORM_MODE_MASK = 15` ⇒ **低 4 位 = 基础波形号**。
+
+| UI 值 | 模式 | 分解 | 波形号 |
+|---|---|---|---|
+| 1 | DU | `DU(1)` | 1 |
+| 2 | GU | `GC16(2)` | 2 |
+| 3 | GC4 | `GC4(3)` | 3 |
+| 4 | ANIMATION / A2 | `ANIM(4)` | 4 |
+| 5 | DEFAULT / AUTO | `AUTO(5)` | 5 |
+| 6 | REGAL | `REAGL(6)` | 6 |
+| 9 | REGAL_PLUS | `REAGL_PLUS(9)` | 9 |
+| **98** | **GC** | `GC16(2) \| WAIT(64) \| FULL(32)` | 2 |
+| **107** | **GCC** | `GCC16(11) \| WAIT \| FULL` | 11 |
+| **108** | **DEEP_GC** | `DEEP_GC16(12) \| WAIT \| FULL` | 12 |
+| 257 | DU+DITHER | `DU(1) \| DITHER_MODE(256)` | 1 |
+| 2049 | DU+Y1 | `DU(1) \| DITHER_COLOR_Y1(2048)` | 1 |
+| 2305 | DU_QUALITY | `DU(1) \| DITHER \| Y1` | 1 |
+| 2308 | A2_QUALITY | `ANIM(4) \| DITHER \| Y1` | 4 |
+| 2312 | DU4 | `DU4(8) \| DITHER \| Y1` | 8 |
+| 4102 | REGAL_D | `REAGL(6) \| REAGL_D(4096)` | 6 |
+| 524290 | HW_REPAINT | `GC16(2) \| HANDWRITE_GU(524288)` | 2 |
+| 5242886 | REGAL_SHUTDOWN | `REAGL(6) \| SHUTDOWN(5242880)` | 6 |
+| 5242978 | GC_SHUTDOWN | `GC16(2) \| WAIT \| FULL \| SHUTDOWN` | 2 |
+| 16777217 | X_DU | `DU(1) \| ONYX_AUTO(16777216)` | 1 |
+| 16777220 | X_A2 | `ANIM(4) \| ONYX_AUTO` | 4 |
+| 33554436 | MONO_A2 | `ANIM(4) \| ONYX_GC(33554432)` | 4 |
+
+**可用标志位全集**（`ViewUpdateHelper.java`）：
+
+| 位 | 常量 | 语义 |
+|---|---|---|
+| 1–15 | `EINK_WAVEFORM_MODE_*` | ★ **基础波形号** |
+| 16 | `EINK_AUTO_MODE_AUTOMATIC` | 自动模式（逐区域） |
+| 32 | `EINK_UPDATE_MODE_FULL` | ★ 全屏（0=PARTIAL 局部）|
+| 64 | `EINK_WAIT_MODE_WAIT` | 等待完成（0=NOWAIT）|
+| 128 | `EINK_COMBINE_MODE_COMBINE` | 合并更新 |
+| **256** | `EINK_DITHER_MODE_DITHER` | ★ 抖动 |
+| 512 | `EINK_INVERT_MODE_INVERT` | 反色 |
+| 1024 | `EINK_CONVERT_MODE_CONVERT` | 颜色转换 |
+| **2048** | `EINK_DITHER_COLOR_Y1` | ★ 抖动色阶（0=Y4）|
+| 4096 | `EINK_REAGL_MODE_REAGLD` | Reagl-D 变体 |
+| 524288 | `EPDC_FLAG_HANDWRITE_GU` | 手写 GU 重绘 |
+| 2097152 | （未命名）| MERGE |
+| 5242880 | `EINK_FLAG_SHUTDOWN` | 关机刷新 |
+| 16777216 | `EINK_ONYX_AUTO_MASK` = `EINK_DITHER_X` | Onyx 自动决策 / X 位 |
+| 33554432 | `EINK_ONYX_GC_MASK` = `EINK_APPLY_MONO` | GC / 单色 |
+
+**② ★ 决定「残影」的物理量：同色态驱动率（闪烁度）**
+
+「**同色态驱动率**」= 对 `from == to`（**像素颜色未变**）的 state，波形仍**强行驱动**的比例。
+即：颜色没变也要让它摆动一次 → 这就是「闪烁」，也是**清除既有残影**的机制。
+
+| 波形 | 同色态驱动（闪烁度）| state 覆盖 | 帧数 | 清残影能力 |
+|---|---|---|---|---|
+| INIT (mode0) | **0.750** | 193/256 | 113 | 最强（仅初始化用）|
+| **GC16 族 (mode2–5)** | **0.229~0.240** | 243~244/256 | 38 | ✅ **强** |
+| DU4 (mode7) | 0.062 | 84/256 | 24 | ⚠️ 弱 |
+| **DU (mode1)** | **0.023** | 42/256 | 22 | ❌ 极弱 |
+| **A2 (mode6)** | **0.009** | 18/256 | 5 | ❌ 几乎无 |
+
+⇒ **规律：同色态驱动率越高 → 越"闪" → 清残影越彻底。**
+⇒ **只有 GC16 族在做全摆动**；DU / A2 / DU4 均为**差分模式**（只驱动真正变化的像素），
+**不具备清除既有残影的能力**。
+
+**③ 对当前 launcher 6 档表的结论**
+
+```
+SCOPE_VALUES = {-1, -1, 1, 2, 4, 2312}
+                None NORMAL DU GC16 A2 DU4
+                            ↑
+                        唯一清残影
+```
+
+| 档 | 波形 | 清残影 |
+|---|---|---|
+| DU(1) | mode1 | ❌ 差分 |
+| **GC16(2)** | mode2 | ✅ **唯一** |
+| A2(4) | mode6 | ❌ 差分（且故障机全屏 reset）|
+| DU4(2312) | 实测回落 mode2 | ✅（但因回落 GC16 才有）|
+
+⇒ **用户的判断成立**：4 个波形档里，**只有 GC16 清残影**。
+   选 DU / A2 时残影必然累积（ref §9.3.20 的周期 GC 会兜底，但周期 GC 走的是
+   `toEpdMode(0)`=AUTO ⇒ 实际仍是 GC16 局部，见下条局限）。
+
+**④ ★ 更深一层：`FULL` 位在 scope 通道【不生效】**
+
+ref §9.3.5 全矩阵 + §9.3.17 复核（2026-09-24 实测）一致表明：
+
+| 值 | 位分解 | 实测 update | 结论 |
+|---|---|---|---|
+| **98** | `GC16 \| WAIT \| **FULL(32)**` | **`update[0]` 局部** | ❌ **显式带 FULL 位仍是局部!** |
+| 107 | `GCC16 \| WAIT \| FULL` | `update[0]` 局部 | ❌ 同上 |
+| 108 | `DEEP_GC16 \| WAIT \| FULL` | `update[0]` 局部 | ❌ 同上 |
+
+⇒ **`update[0]/[1]` 由 native 依 waveform mode 判定，与 flags 的 FULL 位无关**（§9.3.18）。
+
+> ⚠️ **★ 修正（2026-09-25 第二会话，§9.3.24④）**：本表**仅对 scope 通道成立**。
+> 实测 `repaintEverything(98)`（**带参**，走 `REPAINT_EVERY_THING_WITH_MODE`）会得到
+> `waveform_mode=2, update_mode=1` —— **FULL 位在该通道【生效】**。
+> 准确表述：**scope 通道 FULL 不生效；`REPAINT_EVERY_THING_WITH_MODE` 通道 FULL 生效。**
+
+**⇒ 后果：通过 scope 通道设 98/107/108（GC/DEEP_GC）【清不了整屏残影】**
+   —— 它们只对**变化区域**做 38 帧摆动，屏幕其他区域（状态栏、旧内容）的残影不被触及。
+   ⇒ 这很可能是"残影多"的**真正根源**：不是没选 GC16，而是 **GC16 也是局部的**。
+
+**⑤ 唯一的整屏全刷手段：`repaintEverything()`**
+
+```java
+// ViewUpdateHelper.java:441
+public static void repaintEverything() {           // 无参：按当前 scope 波形重画全部窗口
+    transactData(REPAINT_EVERY_THING, ...);
+}
+// ViewUpdateHelper.java:446
+public static void repaintEverything(int mode) {   // 带参：指定模式重画全部
+    data.writeInt(mode);
+    transactData(REPAINT_EVERY_THING_WITH_MODE, ...);
+}
+```
+
+**launcher 现状**（`RefreshModeHelper.java:251`）：
+
+| 项 | 现状 |
+|---|---|
+| `fullRefreshScreen()` → `repaintEverything()` | 存在 |
+| 调用时机 | **仅切档时一次**（`doApplyWithBypass` 内）|
+| 日常使用 | ❌ **无任何周期性/手动全屏清残影入口** |
+
+⇒ 用户当前若长期停留在某一档而不切档，**残影只会累积，不会被整屏清除**。
+
+**⑥ 潜在改进方向（仅记录，未实施 —— 设备断开无法验证）**
+
+| 方向 | 做法 | 风险 |
+|---|---|---|
+| A | 加**手动「全屏清残影」**入口（调 `fullRefreshScreen()`）| ⚠️ **安全但无效** —— 实测无参版不带 FULL 位（§9.3.24④）|
+| B | **周期性自动全刷** | ❌ **会周期性闪烁 + 周期性 reset**（故障机不可取）|
+| C | 档位表增加 98/108 并标注"仅清残影用" | **低效** —— §④ 已证 scope 通道 FULL 位不生效 |
+| D | 用 `repaintEverything(98)` 带参版指定 GC 模式全刷 | ✅ **FULL 生效**，但 ❌ **故障机必然 reset**（5 次中 3 次，§9.3.24⑤）|
+
+> ✅ **★ 已实测（2026-09-25 第二会话，§9.3.24④⑤）**：
+> - **D 的疑问已解**：带参版 `REPAINT_EVERY_THING_WITH_MODE` 与 scope 通道**不同**，
+>   **FULL 位生效**（`update_mode=1`）。
+> - **但代价已量化**：全屏 ⇒ `update[1]` ⇒ `wait all_lut_free` ⇒ 故障机 **5 次中 3 次 reset**
+>   （`waveform[2] update[1] frame_cur[1] frame_total[38]`，与 A2 同一条路径）。
+> - **A 的疑问已解**：无参 `repaintEverything()` 输出 `waveform_mode=255, update_mode=0`
+>   ⇒ **launcher 的「切档后全刷」其实只是局部重画，并非整屏清残影**（重要认知修正）。
+>
+> ```
+> ⇒ 净结论：故障机上「整屏清残影」与「避免 reset」物理不可兼得。
+>   launcher 现状（无参 repaint）恰是故障机唯一安全选择，不应改动。
+>   正常机应无此问题 ⇒ 可为正常机提供清残影入口（§6.6 待验证）。
+> ```
+
+**⑦ 复现所需数据来源**
+
+- 位分解表：`ViewUpdateHelper.java`（ref §9.3.10 已全值校验）
+- 同色态驱动率：`_scratch_gs/wbf_shape.py` / `wbf_phase.py`（解码 `eink_waveform.wbf`）
+- FULL 位不生效：`_scratch_gs/full_matrix.sh` + §9.3.17 分离实验
+- 周期 GC 语义：§9.3.20（输入计数触发，`toEpdMode(0)`=AUTO=GC16 局部）
+
+#### 9.3.23 ★★★ 死机重启 + 刷新停滞的完整证据链（2026-09-25，故障机 6C7F0E64）
+
+> 起因：用户报告"出现死机重启现象，这几个模式都无法解决刷新停滞导致一次性刷新重叠问题"。
+>
+> **★ 核心结论：两个现象根因不同，且【都与刷新模式选择无关】：**
+> 1. **重启** = §12.7 的 WMS WTF 老毛病复发（`WakeLock tag:WindowManager ... is forbidden`），
+>    但**本次证据显示它不是 Watchdog 触发**，而是另有触发源（见③）。
+> 2. **刷新停滞** = **上层根本没有提交帧**（`SET_EBC_SEND_UPDATE = 0`），
+>    ⇒ 不是"模式不给力"，而是**没有东西可刷**。换模式必然无效。
+
+**① 现场状态（2026-09-25 01:51 重启后采集）**
+
+| 项 | 值 |
+|---|---|
+| uptime | 204s（刚重启，`bootreason=reboot` 软件重启） |
+| 内核 | `-dirty #79 SMP PREEMPT Mon Mar 16 18:22:03`（= v6 patched） |
+| 当前档位 | `launcherRefreshMode=2` → 新表 index 2 = **DU(1)** |
+| prefs 时间线 | 01:04 NORMAL → 01:29 GC16 → 01:35 DU → 01:39 None → 01:46 DU → 01:48 DU |
+
+**② ★ 刷新停滞的证据：`SET_EBC_SEND_UPDATE = 0`**
+
+```bash
+# 启动后 452s 的 dmesg 全量统计
+SET_EBC_SEND_UPDATE  : 0      ← ★ 完全没有帧提交!
+CLEAR_ALL_UPDATE     : 0
+dump_lut_list        : 6      ← 仅在 reset 时打印
+reset cause          : 3      ← 全部在启动 25~27s
+epdc power error     : 57
+TPS6518x 失败        : 116
+Unable to enable DISPLAY: 57
+Pending Wakeup Sources: 24（含 epdc_power）
+```
+
+**⇒ 无帧提交 ⇒ 无 LUT ⇒ 无波形 ⇒ 无从谈"模式"** —— 这解释了"这几个模式都无法解决"：
+**不是模式无效，而是根本没有刷新请求到达 EPDC。**
+
+**③ 重启时刻的 WTF 密度（推翻 §12.7 的 Watchdog 结论）**
+
+dropbox 全量：**944 个 `system_server_wtf`**（跨 09-24 00:07 ~ 09-25 01:57），栈恒定：
+
+```
+Subject: PowerManager
+android.util.Log$TerribleFailure: WakeLock tag:WindowManager from [android] is forbidden
+    at PowerManager$WakeLock.acquire(PowerManager.java:2423)
+    at WindowManagerService.setHoldScreenLocked(WindowManagerService.java:5620)
+    at RootWindowContainer.performSurfacePlacementNoTrace(RootWindowContainer.java:939)
+```
+
+**10 分钟桶分布（找爆发）**：
+```
+09-24 23:50 : 136    ← 爆发
+09-25 00:10 : 233    ← 峰值
+09-25 00:20 :  73
+09-25 01:50 :  63    （重启后）
+```
+
+**★ 关键判定 —— WTF 时间线【无中断】**：
+```
+最后 WTF: 09-25 01:57:25
+重启时刻: 09-25 01:48（由 launcher 日志 "== init ==" 判定）
+```
+⇒ 01:48 重启后 WTF **继续累积**（01:48~01:57 共 132 个），说明
+**重启不是 WTF 爆发到 Watchdog 阈值所致**（若如此，重启前一瞬应有尖峰、重启后归零）。
+⇒ **§12.7 的"WTF 刷屏 → Watchdog"论断本次【未被证实】**，重启另有触发源（未定，需 events 日志）。
+
+**④ ★ ★ 时间相关性：WTF 爆发窗口与 launcher 切档【不重合】**
+
+| WTF 爆发窗口 | launcher 切档记录 |
+|---|---|
+| 09-24 23:50 (136) | ❌ **无任何记录**（日志从 12:20 直接跳到 09-25 01:04）|
+| 09-25 00:10 (233) | ❌ **无任何记录** |
+| 09-25 00:20 (73) | ❌ **无任何记录** |
+
+⇒ **WTF 爆发与"切档"无关**（§12.7 曾归因于"EAC 批量写 12 app"，但当前 launcher 已改为
+scope-only 切档，**已无批量写 EAC**）。⇒ 需另找爆发源（候选：USB 投屏切换、SystemUI 窗口动画）。
+
+**⑤ §12.7 对策的有效性复核**
+
+| §12.7 对策 | 状态 | 本次观测 |
+|---|---|---|
+| "EAC 写入改 save-only" | ✅ 已实施（`applyFixedEac` 只在启动调一次）| 切档已无批量写 |
+| "消除最大批量窗口重建源" | ✅ 已实施 | 但 **WTF 仍达 944 个** ⇒ 该源不是唯一/主要源 |
+| "避免瞬时批量窗口操作" | ⚠️ | WTF 爆发窗口（23:50/00:10）无 launcher 操作 ⇒ 是**系统自身**行为 |
+
+**⑥ 对用户问题的直接回答**
+
+| 用户假设 | 判定 |
+|---|---|
+| "这几个模式都无法解决刷新停滞" | ✅ **现象成立，但归因错误** —— 停滞原因是**零帧提交**（②），换任何模式都无效 |
+| "刷新停滞导致一次性刷新重叠" | ⚠️ **无证据支持"重叠"** —— dmesg 里 `pending_list` 仅 15 条且都在 reset 时打印，**无堆积**（对比 §9.3.3 的"中位 2 条/次"基线）|
+| "需要选清残影模式"（上一轮） | ⚠️ 与本轮重启**无关** —— 重启发生在 25s power error 期，非残影问题 |
+
+**⑦ 待查（设备已可用，可继续）**
+
+| # | 待查项 | 方法 |
+|---|---|---|
+| 1 | **重启触发源** | `logcat -b events` 的 `boot_progress` / `watchdog` 记录；`/data/misc/reboot/` |
+| 2 | **WTF 爆发源** | WTF 时间戳与 `logcat -b events`（am_/wm_ 事件）对齐 |
+| 3 | **"零帧提交"是否持续** | 实机操作（翻页）后看 `SET_EBC_SEND_UPDATE` 是否出现 |
+| 4 | **power error 与 blackout 的关系** | `epdc_power` wakelock 长期持有 + `Unable to enable DISPLAY regulator.err = 0xffffff92` |
+
+**⑧ 复现 / 采集命令**
+
+```bash
+# 重启原因
+adb shell su -c "getprop ro.boot.bootreason; cat /proc/uptime"
+# WTF 数量与分布
+adb shell su -c "ls /data/system/dropbox/system_server_wtf* | wc -l"
+adb shell su -c "grep -m1 TerribleFailure /data/system/dropbox/system_server_wtf@<ts>.txt"
+# 帧提交（滞停关键指标）
+adb shell su -c "dmesg > /data/local/tmp/dm.txt"
+adb shell su -c "grep -c SET_EBC_SEND_UPDATE /data/local/tmp/dm.txt"
+```
+
+**⑨ ★★ 追加实测（2026-09-25 02:00，用户报告"停滞"期间）
+
+**用 root 注入 input 验证**（`adb shell su -c "input swipe ..."`，`rc=0` 成功）：
+
+| 项 | 值 |
+|---|---|
+| 前台 app | `com.qidian.QDReader/.ui.activity.QDReaderActivity`（起点阅读）|
+| `mWakefulness` | `Awake`（屏幕亮着）|
+| **`SET_EBC_SEND_UPDATE`** | **0** ← ★ 翻页操作后仍为零 |
+| `appScopeRefreshMode` | 2（= EAC 逻辑 A2，**但此读数不可信**，§9.3.17③）|
+| **`fastModeIndex`** | **2**（app fast mode —— 说明 SF 侧处于快速模式）|
+
+**dmesg 实录（swipe 后连续）**：
+```
+[644.963] Reg PowerGood: [0xf] 0xBA
+[644.963] ERROR TPS6518x waiting for power good!
+[645      Retry 2 more times
+[646.595] ERROR TPS6518x waiting for power good!
+[646.596] Unable to enable DISPLAY regulator.err = 0xffffff92
+[646.596] onyx_epdc_powerup(): epdc power error!
+[650.972] (同上循环)
+[652.575] onyx_epdc_powerup(): epdc power error!
+[657.601] (同上循环)
+```
+⇒ **每 2~5 秒一次 powerup 失败循环**，且**全程零帧提交**。
+
+**⑩ ★★ 结论修订：停滞根因 = 供电失败导致 EPDC 无法接收更新**
+
+| 环节 | 状态 |
+|---|---|
+| 用户操作 | ✅ 正常（swipe 注入成功、前台是阅读器）|
+| 上层合成 | ✅ 正常（`fastModeIndex=2` 说明 SF 活跃）|
+| **EPDC powerup** | ❌ **持续失败**（`TPS6518x` + `err=0xffffff92`）|
+| **帧提交到 EPDC** | ❌ **0 次** |
+| ⇒ 结果 | **画面停滞**（有输入、有合成、无显示）|
+
+**⇒ 这不是"模式问题"，也不是"残影问题"** —— 是 **TPS6518x 供电故障的又一次表现形态**。
+   ⇒ 换 DV/GC16/A2/DU4 **一律无效**（用户观察"这几个模式都无法解决"得到解释）。
+
+**⑪ 对"一次性刷新重叠"的判定**
+
+| 用户描述 | 证据 |
+|---|---|
+| "刷新停滞" | ✅ 成立（零帧提交）|
+| "一次性刷新重叠" | ⚠️ **未观测到** —— powerup 成功时会一次性补刷累积内容，视觉上可能表现为"重叠"；但 dmesg 里 **`pending_list` 无堆积**（§⑥）|
+
+⇒ 推测：**powerup 偶尔成功时，把积压的画面一次性刷出** → 视觉上像"重叠/跳变"。
+   本质仍是**供电间歇性成功**，非软件堆积。
+
+**⑫ 待验证（下一步）**
+
+| # | 假设 | 验证方法 |
+|---|---|---|
+| 1 | powerup 成功时确有"一次性补刷" | 抓 powerup 成功瞬间的 `SET_EBC_SEND_UPDATE` + LUT dump |
+| 2 | `err=0xffffff92` 的具体含义 | 查 `regulator` 错误码（`-0x6E` = `-ENODATA`?）|
+| 3 | 是否与电池电量/温度相关 | 对比 `heal thd` 的 l/v/t 与 powerup 成功率 |
+
+**⑬ ★★★ 决定性实验（2026-09-25 02:10，前台=Legado 阅读页，用户要求重测）
+
+**★ 用 `/sys/class/sepdc/debug/status` 的 `frame[a:b:c]` 三值作为主指标**（比 dmesg 可靠，
+不受 `debug_level=0` 影响）：
+
+```
+t(0.4s采样)  frame[a:b:c]          解读
+0~6    15290:15290:15290     停滞 2.8s（三值相等）
+7      15318:15317:15316     ★ a>b>c  开始推进
+8      15328:15328:15328     追平 +38（GC16 一帧完成）
+9      15364:15363:15362     ★ a>b>c
+10~19  15404:15404:15404     停滞 3.6s
+20     15440:15439:15438     ★ a>b>c
+21     15480:15480:15479     ★
+22     15523:15522:15521     ★
+23~24  15556:15556:15556     追平
+```
+
+**⇒ 停滞-突增的量化周期 = 约 38 帧/次**（正是一个 GC16 波形）：
+```
+停滞 2.8~3.6s → 推进 +38帧 → 停滞 → +38帧 → ...
+```
+
+**⑭ ★★★ 根因定论：`update_err=1` 使 EPDC 每帧都要"重试上电"**
+
+`/sys/class/sepdc/debug/update_err` **恒为 1**（我持续采样 25 次全是 1）。
+
+结合 dmesg 的完整模式：
+```
+[1148.933] Reg Enable: [0x1] 0xAF
+[1148.933] Reg PowerGood: [0xf] 0xBA
+[1148.933] ERROR TPS6518x waiting for power good!
+[1148.933] Retry 2 more times                          ← 第 1 次重试（可能成功）
+[1150.564] Reg Enable: [0x1] 0xAF
+[1150.564] Reg PowerGood: [0xf] 0xBA
+[1150.564] ERROR TPS6518x waiting for power good!
+[1150.564] Unable to enable DISPLAY regulator.err = 0xffffff92  (-ETIMEDOUT)
+[1150.564] onyx_epdc_powerup(): epdc power error!      ← 第 2 次重试失败
+```
+
+**⇒ 链条**：
+```
+TPS6518x power good 位永不置起（PowerGood 回读恒 0xBA，无变化）
+  → 每次 powerup 需重试 2 次（每次 ~1.6s i2c 超时）
+  → 帧虽然提交了（frame 计数增长），但【每帧要等 1.6~3.2s 的供电重试】
+  → 期间新提交的帧堆积（drm_commit_pending_cnt[2]）
+  → 重试成功的那一帧一次性刷出【累积的所有变化】
+  ⇒ 视觉表现 = "停滞 → 一次性刷新重叠"
+```
+
+**⑮ ★ 推翻我上一轮的两个错误结论（重要）**
+
+| 上一轮结论 | 本次证据 | 修正 |
+|---|---|---|
+| "`SET_EBC_SEND_UPDATE = 0` ⇒ 零帧提交" | `frame[]` 持续增长（每次 +38~137）| ❌ **错** —— 该打印仅在 `debug_level≥1` 时输出，**与帧提交无关** |
+| "停滞 = EPDC 收不到帧" | frame 确实在增长，但**慢且跳变** | ❌ **错** —— 是**帧提交后执行被供电重试拖慢** |
+
+**⇒ 正确诊断：帧提交正常，执行被 TPS6518x 供电重试拖成"停顿式"**
+
+**⑯ 关键对照实验（证明与"操作"无关）**
+
+| 场景 | dmesg 行数 | Reg Enable 次数 |
+|---|---|---|
+| 翻页 4 次（~4s） | **19** | 2 |
+| **idle 30 秒** | **41** | 更多 |
+
+⇒ **翻页时的 EPDC 活动比 idle 还少** —— 说明"供电重试"是**持续背景行为**，
+   与用户操作无关；操作只是让**积压的帧**在重试成功时被一次性刷出。
+
+**⑰ 与刷新模式的关系（回答用户"几个模式都无法解决"）**
+
+| 档位 | 对停滞的影响 |
+|---|---|
+| DU(1) | ❌ 无效 —— 停滞源于供电重试，非波形 |
+| GC16(2) | ❌ 无效 |
+| A2(4) | ❌ 无效（且会引入全屏 reset 循环，§9.3.17）|
+| DU4(2312) | ❌ 无效（回落 GC16）|
+| **任意档** | **❌ 都无效** —— 根因在电源硬件，模式层无法触及 |
+
+⇒ **用户观察"这几个模式都无法解决"完全正确**，原因已查明。
+
+**⑱ 待验证（下一步方向）**
+
+| # | 假设 | 验证 |
+|---|---|---|
+| 1 | 提高 i2c 重试的**超时容忍**（v5 patch 已从 5s→0.5s）是否反而有害 | 对比 v5/v6 下 `Retry 2 more times` 的分布 |
+| 2 | 降低 `powerup` 频率（合并帧）能否减少重试 | 调 `cut_frame_num` 观察 |
+| 3 | `PowerGood: [0xf] 0xBA` 是否**恒为固定值**（硬件状态字不更新）| 已证：24 次回读全部 `0xBA` |
+| 4 | 能否通过 **`panel_clean` / `reset_test`** 节点强制恢复 | 节点存在（`panel_clean` 只读值 `ok`，`reset_test` 可写）|
+
+**⑲ ★★★ 新现象实测：所有模式都"双刷"（2026-09-25 02:20，用户报告）
+
+> 用户报告："所有模式都会一次性刷新两次。就算不用 launcher 也会。"
+
+**① 受控实验：单次翻页 → 两组刷新**（20ms 采样 `frame[]`）
+
+```
+采样 0~9   (0~200ms)     : 17858 → 17894   +36帧  ← 第 1 组
+采样 10~111(200~2240ms)  : 静止 2.0s
+采样 112~140(2240~2820ms): 17899 → 18008  +109帧  ← 第 2 组
+```
+⇒ **一次操作确实产生两组刷新，中间停 2.0 秒** —— 用户观察成立。
+
+**② ★ 决定性对照：完全不操作时，同样双刷**
+
+```
+采样 0~19  (0~380ms)     : 18046 → 18084   +38帧
+采样 20~119(380~2380ms)  : 静止 2.0s
+采样 120~129(2380~2580ms): 18086 → 18122  +36帧
+```
+⇒ **不操作也双刷**（周期约 2.0~2.4s）。
+
+**③ ★★ 决定性实验：停掉 launcher 后仍然双刷**
+
+```bash
+adb shell su -c "am force-stop cn.modificator.launcher"
+adb shell su -c "pidof cn.modificator.launcher"   # → 空（已停）
+```
+
+停止后带时间戳采样（`/proc/uptime` 为时钟）：
+```
+kt=3752.505 → 3752.803   +37帧  (0.30s 内)
+[停 4.47s]
+kt=3757.269 → 3757.683   +37帧
+[停 2.41s]
+kt=3760.092 → 3760.505   +38帧
+```
+
+连续 `status` 观察（无 launcher）：
+```
+kt=1769.49 frame=18959
+[停 3.73s]                       ← 停滞
+kt=1773.22 frame=18962  (+3)
+kt=1773.31~1774.09 frame 18962→19035 (+73, 0.9s 内连续推进)
+```
+
+**⇒ 结论：双刷与 launcher【完全无关】（用户判断正确）。**
+   **⇒ 也与刷新模式无关** —— 是**系统级后台行为**。
+
+**④ 双刷的量化特征**
+
+| 指标 | 值 |
+|---|---|
+| 每组帧数 | **37~38 帧**（= 一个 GC16 波形）|
+| 停滞时长 | **2.0 ~ 4.5 秒**（波动）|
+| 是否需操作 | ❌ **不需要**（idle 也有）|
+| 是否需 launcher | ❌ **不需要**（force-stop 后仍有）|
+| 每组内部 | 连续推进约 0.3~0.9s |
+
+**⑤ 与供电故障的关系（推断）**
+
+结合 §⑭（`update_err=1`、每次 powerup 重试 2 次、每次 ~1.6s i2c 超时）：
+```
+一个 GC16 需 38 帧 → 需要 1 次成功的 powerup
+powerup 失败 → 重试（1.6s）→ 再失败 → 重试 → 成功
+成功的平均间隔 ≈ 2.0~4.5s
+⇒ 每次 powerup 成功 = 刷出积压的一批帧（≈38帧）
+⇒ 视觉上 = "刷一次 → 停 → 再刷一次"（双刷的来源之一）
+```
+
+**⑥ ★ 对"双刷"的两种可能机制（待区分）**
+
+| 机制 | 说明 | 验证方法 |
+|---|---|---|
+| **A. 供电重试** | powerup 失败→重试→成功，成功时刷一批 | 对齐 powerup 时间戳与 frame 跃变 |
+| **B. 系统双发** | 系统本身对同一变更提交两次（如 EAC 的 GC + 应用刷新）| 查 `dump_lcdc_state` 的 commit 计数 |
+
+**⇒ 现有证据偏向 A**（`update_err=1` 恒定 + powerup 重试日志密集 + 停 launcher 后双刷依旧）。
+
+**⑦ 待办**
+
+| # | 事项 |
+|---|---|
+| 1 | 停 launcher + 无操作时，对齐 `Reg Enable` 时间戳与 `frame` 跃变（需解决脚本内 dmesg 权限问题）|
+| 2 | 逆向 `update_err` 的清除条件（该标志是否为"上次失败未恢复"的粘滞位）|
+| 3 | 确认 `frame[a:b:c]` 三值的语义（`a≠b≠c` 时的含义）|
+
+**⑧ ★ 工具教训（本轮踩坑，务必遵守）**
+
+| 坑 | 现象 | 正确做法 |
+|---|---|---|
+| **脚本内 `dmesg` 失败** | 脚本里 `dmesg > f` 得到空文件或 `klogctl: Permission denied`；同命令经 `su -c` 直连正常 | **先 `adb shell su -c "dmesg > /data/local/tmp/x.txt"` 导出，再让脚本只读该文件** |
+| `echo > file` 被 PowerShell 截获 | `su -c "echo xxx > file"` 时 `>` 在宿主机执行，脚本内容损坏 | 用 `write_file` 写好脚本再 `adb push` |
+| `input swipe` 权限 | 非 root 注入报 `INJECT_EVENTS permission` | 必须 `su -c "input ..."` |
+| `reset_test` 不可写 | `--w-------` 但 `echo 1 >` 仍 `Permission denied` | 该节点被 SELinux 保护，**不可用** |
+
+**⑨ 节点可写性实测一览（2026-09-25）**
+
+| 节点 | 权限 | 可写 | 语义 |
+|---|---|---|---|
+| `status` | `-r--r--r--` | ❌ | 状态（frame/luts/wb 等）|
+| `update_err` | `-r--r--r--` | ❌ | 错误标志（恒 1）|
+| `panel_clean` | `-r--r--r--` | ❌ | 只读取值 `ok`（**非命令节点**）|
+| `panel_init` / `panel_last` | `-r--r--r--` | ❌ | 同上 |
+| `dump_list` | `-r--r--r--` | ❌ | cat 即触发 dump |
+| `reset_test` | `--w-------` | ⚠️ **实测被 SELinux 拒** | 调试用强制 reset |
+| `submit_upd_work` | `--w-------` | ⚠️ 未测 | 手动提交更新 |
+| `night_mode` | `--w-------` | ⚠️ 未测 | 夜间模式 |
+| `update_snapshot` | `--w-------` | ⚠️ 未测 | 快照 |
+| **`debug_level`** | `-rw-r--r--` | ⚠️ **实测 writable 但被拒** | 日志级别 |
+| **`cut_frame_num`** | `-rw-r--r--` | ⚠️ 未测 | 截断帧数 |
+| **`update_disable`** | `-rw-r--r--` | ⚠️ 未测 | 禁用更新（值 0）|
+| `time_test_level` | `-rw-r--r--` | ⚠️ 未测 | 时间测试级别 |
+
+⇒ **`panel_clean` 等"清残影节点"不存在**（只读状态指示）；`reset_test` 被拒。
+
+**⑳ ★★★ 机制 A 验证：双刷 = powerup 重试周期（2026-09-25，待明日补完）
+
+**① 时间对齐证据（两份独立数据，均为 idle 无操作）**
+
+**数据源 1 — frame 跃变序列**（`/proc/uptime` 为基准，50ms 采样）：
+```
+kt=2381.08 → 2381.49  : 21463 → 21499  (+36)  持续 0.41s
+[停 5.00s]
+kt=2386.49 → 2386.89  : 21507 → 21537  (+30)  持续 0.40s
+[停 27.5s]                                      ← 长间隔
+kt=2414.39 → 2414.90  : 21539 → 21575  (+36)  持续 0.51s
+```
+
+**数据源 2 — powerup 周期**（dmesg，同源 `kt` 时钟）：
+```
+kt=1946.465  Reg Enable → Retry 2 more times     ← 第 1 次重试
+kt=1948.194  Reg Enable → epdc power error!      ← 第 2 次重试也失败  [Δt=1.73s]
+kt=1952.503  Reg Enable → Retry 2 more times     ← 新周期开始        [停 4.31s]
+kt=1954.196  Reg Enable → epdc power error!      ← 失败              [Δt=1.69s]
+kt=1955.130  powerdown ... clear!                ← 周期结束
+kt=1959.844  下一轮 Reg Enable                   [停 4.71s]
+```
+
+**② ★ 关键比对：两组数据的"停滞时长"同一量级**
+
+| 指标 | frame 跃变 | powerup 周期 |
+|---|---|---|
+| 停滞时长 | 5.00s / 27.5s | 4.31s / 4.71s |
+| 活动时长 | 0.40~0.51s | 1.69~1.73s（2 次重试）|
+
+⇒ **停滞期 ≈ powerup 失败重试期**（都是 4~5 秒量级，与 §⑭ 的"每次重试 ~1.6s"吻合）。
+
+**③ 机制 A 成立性判定**
+
+```
+一个 GC16 波形需 38 帧 → 需 1 次成功 powerup
+powerup 失败 → 重试 2 次（各 ~1.7s）→ 若都失败则放弃、等下一轮
+下一轮间隔 ≈ 4~5s
+成功的那些轮次 = 执行 38 帧 = frame +36~38
+⇒ frame 跃变（+36）与 powerup 周期（4~5s）在时间尺度上对应
+```
+
+**⇒ 机制 A（供电重试驱动）【成立】：双刷是 powerup 重试节奏的直接体现。**
+
+**④ 但有一处待解释**
+
+| 现象 | 说明 |
+|---|---|
+| 观察到 27.5s 的长停滞 | 远超 4~5s 周期 ⇒ 可能是**连续多轮 powerup 全失败**，或系统进入某种省电态 |
+| frame 跃变恒为 +30~38 | 与 GC16 的 38 帧吻合；但**为何 idle 也持续刷 38 帧**？—— 疑为系统周期性重绘（时钟/状态栏）触发 |
+
+⇒ **待明日验证**：抓 27.5s 长停滞期间的完整 dmesg（是否有多轮连续失败）。
+
+**⑤ 明日待办清单**
+
+| # | 事项 | 方法 |
+|---|---|---|
+| 1 | 补完 27.5s 长停滞的解释 | 抓长停滞期完整 dmesg |
+| 2 | 确认 idle 为何持续刷 38 帧 | 停 launcher + 停所有前台 app 后观察 |
+| 3 | 验证 `epdc-power-fail-dont-update` 属性 | 该 dt 属性（内核有解析代码）疑似控制"供电失败时不更新"，**若为 0 则失败也照刷 → 可能正是双刷来源** |
+| 4 | 逆向 `a2-clean-mode` / `a2_frame_num` | 内核 `onyx_epdc_parse_dt` 有解析，可能可调 |
+| 5 | 试写 `cut_frame_num` / `update_disable` | 唯一两个可写且未测的节点 |
+
+**⑥ ★ 本次逆向新发现的 EPDC 可配置项（供明日用）**
+
+从内核 `onyx_epdc_parse_dt`（0x53f7c0 区域）挖出的**完整 dt 属性清单**：
+
+| 属性名 | 结构体偏移 | 推测作用 |
+|---|---|---|
+| `epdc-init-mode-force-disable` | — | 强制禁用 init 模式 |
+| **`epdc-power-fail-dont-update`** | — | ★ **供电失败时不更新**（若为 0 → 失败也刷）|
+| `epdc-panel-v3p3-always-on` | — | 面板 v3p3 常开 |
+| `epdc-waveform-load-delay` | — | 波形加载延迟 |
+| `panel-pwrdown-delay` | — | 掉电延迟 |
+| `panel-pwrdown-wait` | — | 掉电等待 |
+| `sf-rotation` | — | SF 旋转 |
+| `cfa_mode` | — | 彩色滤光片模式 |
+| **`a2-clean-mode`** | — | ★ **A2 清残影模式** |
+| **`a2_frame_num`** | — | ★ **A2 帧数** |
+| `cut-frame-fill-zero` | — | 截帧填充 0 |
+| `power-timeout-deteck` | — | 供电超时检测 |
+| `temp-deteck-enable` | [x21+0x271 附近] | 温度检测开关 |
+| `temp-deteck-from-pmic` | `[x21,#0x271]` | 温度来源=PMIC |
+| `dither-set-disable` | `[x21,#0x272]` | 禁用 dither |
+| `epdc-gu-regal-enable` | `[x21,#0x273]` | GU REGAL 启用 |
+| `temp-diff` | `[x21,#0x270]` | 温度差阈值 |
+
+> **解读**：这些是**内核按 `of_property_read_*` 从设备树读取**的（`bl #0xaecf58` = dt 属性读取函数，
+> 返回 0 表示属性不存在 → 存入结构体的值为 0/默认）。
+> ⇒ **属性不存在时功能关闭**；若要启用需**改设备树**（dtb），而非改 sysfs。
+
+> ⚠️ **★ 重大修正（2026-09-25 第二会话实测，见 §9.3.24②）**：上表 17 个属性在**本机设备树中
+> **全部不存在**（仅 `epdc-waveform-load-delay` 存在，值 4000）。故上述「改 dtb 启用」的路径
+> **不成立** —— 不是"有开关没打开"，而是"设备树从未定义这些接口"。
+
+---
+
+#### 9.3.24 ★★★ 第二会话实测：推翻 3 条旧结论 + FULL 位新机制（2026-09-25，故障机 6C7F0E64）
+
+> 起因：按 HANDOFF §6 的候选任务清单逐项执行（§6.1 双刷机制 / §6.2 dt 属性 / §6.3 重启触发源 /
+> §6.4 清残影入口 / §6.5 可写节点）。
+> 设备：内核 v6-A2（`#79`），uptime 从 ~33000s 起。
+> **dmesg 基准标定**：`K = uptime_at_dump − dmesg末行kt ≈ **27687.6**`（三份独立采集解出同一值）。
+
+**① §6.1 双刷机制 A【证伪】**
+
+用 SDM 无关的三路独立数据（frame 采样 / dmesg 电源事件 / `pending_cnt`）对齐：
+
+| 证据 | 数据 | 结论 |
+|---|---|---|
+| **时序方向** | `Reg Enable` 全部出现在 frame 推进段**开始之后**（lag +0.01 / +0.67 / +1.44 / +3.13 / +10.43s） | ❌ **不是「powerup 驱动刷新」**，而是**「刷新触发 powerup」** —— 原判据蕴含了错误因果方向 |
+| **`pending_cnt` 性质** | `=2` 出现 3.2~3.7% 采样，且与 4 个推进段**逐段对齐**；末期回 0 | ❌ **不是"堆积"** —— 是**双缓冲流水线正常状态**（一个在写、一个在等）|
+| **idle vs 操作** | 纯 idle 60s 内 3 组自发刷新（`+19~22` 帧 / 0.3s，间隔 ~32s）；注入 swipe 后 1 组（`+20` 帧）**幅度相同** | ❌ 操作与 idle **无差别** |
+| **空档期性质** | `epdc_active_luts` 每组后归零；两组之间**零** reset / power error / LUT 活动 | **EPDC 完全空闲**（非供电重试、非停滞）|
+
+⇒ **机制 A（双刷 = powerup 重试周期）证伪。**
+⇒ 每组帧数 `+17~22` = **一个 DU 波形**（非 GC16 的 38）⇒ 与"一个 GC16 需 38 帧"的推理也不符。
+⇒ **新假设（未验证）**：**上层（SF / Onyx 框架）周期性自发提交同幅刷新**；建议下一步查
+   EAC 的 `gcInterval` / debouncer / 系统时钟重绘源。
+
+> ⚠️ HANDOFF §6.1 原定判据「每次 frame 跃变前 ~1.7s 应有 `Reg Enable`」**不成立**。
+
+**② §6.2 设备树 EPDC 属性：16/17 不存在（上文 §6 清单作废）**
+
+全树遍历 `/sys/firmware/devicetree/base` 的结果：
+
+```
+[MISSING] epdc-power-fail-dont-update      [MISSING] epdc-panel-v3p3-always-on
+[MISSING] epdc-init-mode-force-disable     [MISSING] a2-clean-mode / a2_frame_num
+[MISSING] panel-pwrdown-delay / -wait      [MISSING] epdc-gu-regal-enable
+[MISSING] dither-set-disable               [MISSING] cfa_mode / sf-rotation
+[MISSING] cut-frame-fill-zero              [MISSING] power-timeout-deteck
+[MISSING] temp-deteck-enable / -from-pmic  [MISSING] temp-diff
+[FOUND]   epdc-waveform-load-delay = 00 00 0F A0 (= 4000)   @ /soc/sepdc_mfd
+```
+
+节点 `soc/sepdc_mfd`（`compatible = "onyx,sepdc_mfd"`）只有 3 个属性：
+`compatible` / `epdc-waveform-load-delay` / `status`。dtb 在独立分区 `dtbo_a`/`dtbo_b`（`dtbo_idx=2`）。
+
+⇒ **HANDOFF §6.2「最有价值的软件缓解点」不存在** —— `of_property_read_*` 全部返回非 0，
+   功能处于默认关闭，且**上游从未定义**这些属性 ⇒ **优先级应大幅下调**。
+
+**③ §6.3 重启触发源：全部软件 reboot，无崩溃无 ANR 无 watchdog**
+
+```
+ro.boot.bootreason = reboot        sys.boot.reason = reboot
+persist.sys.boot.reason.history =
+    reboot,1790272078
+    reboot,1790170752
+    reboot,shell,1790169156      ← shell 发起（开发期手动）
+    reboot,shell,1790167707
+dropbox 类型统计（1000 文件）: system_server_wtf 963 / system_app_wtf 23 /
+                              data_app_wtf 13（全为 com.qidian.QDReader）/ SYSTEM_BOOT 1
+崩溃 / ANR / native_crash / tombstone : 【0】
+logcat -b events grep watchdog      : 【0】
+```
+
+⇒ **WTF 与重启无因果**（WTF 时间线跨重启无中断，再次否定 §12.7 的 Watchdog 假说）。
+⇒ `reboot,`（无 `shell` 前缀）= 由 **system_server / init 调用 `reboot()`**。
+⇒ **触发源仍未定位** —— 当前 `events` buffer 仅约 40 分钟，不足覆盖重启时刻。
+   **建议**：常驻 `logcat -b events` 落盘，待下次重启抓 `reboot_requested`。
+
+**④ ★★ §6.4 `FULL(32)` 位在「带参 `repaintEverything`」路径上【生效】**
+
+新观测手段：SDM 的 `update_to_display` 日志**直接给出** SF→EPDC 的真实 `waveform_mode` /
+`update_mode`，**不受 `dump_lcdc_state` 淹没影响**：
+
+```bash
+adb logcat -d | grep 'update_to_display'
+#  → update_to_display[1/0] -- marker[N] waveform_mode = X, update_mode = Y, Rect[…], flags = Z
+```
+
+完整对照表（每项单独触发，`logcat -c` 后观测）：
+
+| 调用 | `waveform_mode` | `update_mode` | 全屏？ |
+|---|---|---|---|
+| 仅设 `scope=98` + swipe | 255 | 0 | ❌ |
+| 仅 `scope=2` + swipe | 255 | 0 | ❌ |
+| **无参 `repaintEverything()`**（launcher `fullRefreshScreen()` 现用） | 255 | 0 | ❌ |
+| 带参 `repaintEverything(2)`（纯 GC16） | 2 | 0 | ❌ |
+| **带参 `repaintEverything(98)`**（GC16\|WAIT\|FULL） | **2** | **1** | ✅ |
+| **带参 `repaintEverything(108)`**（DEEP_GC16\|WAIT\|FULL） | **12** | **1** | ✅（**未回落**）|
+| scope=A2(4)（历史对照） | 6 | 1 | ✅ |
+
+⇒ **推翻「FULL 位一律不生效」** —— 结论应修正为：
+   **scope 通道 FULL 不生效（§9.3.17⑤ 正确）；但 `REPAINT_EVERY_THING_WITH_MODE` 通道 FULL 生效。**
+⇒ **连带修正**：launcher 的「切档后全刷」实际只是**按当前 scope 局部重画**，**并非整屏清残影**。
+
+**⑤ ★★★ 全屏 GC16 在故障机【必然 reset 风险】—— 与 A2 同一条路径**
+
+连续 5 次 `repaintEverything(98)`（间隔 9s）：**C2 / C3 / C5 共 3 次 reset**，C1 / C4 干净完成。
+
+reset 三连的完整链（C2 为例）：
+```
+kt=7774.950  o_e_f_f_u(): Flush updates timeout! updates_active[1]. caller = __onyx_epdc_buf_put_queue+0x5c0
+kt=7774.951  dump_lut_list(): magic[8128] lut[0] waveform[2] update[1] frame_cur[1] frame_total[38]!
+kt=7775.450  o_e_u_w_s(): wait all_lut_free timeout 500 ms!
+kt=7775.450  onyx_epdc_reset(): reset cause[update wb wait all_lut_free timeout].
+kt=7775.451  onyx_epdc_reset(): set update_err.
+```
+
+⇒ **卡在第 1 帧（`frame_cur[1]`）**，`update[1]` 全屏 → 必须 `wait all_lut_free`（等所有 LUT 空闲）
+   → 供电故障致其它 LUT 卡住 → 500ms 超时 → reset。
+⇒ **触发 reset 的是 `update[1]` 全屏属性，与波形是 GC16 还是 A2 无关。**
+
+**⑥ 对「手动清残影入口」的最终裁决**
+
+| 方案 | 裁决 |
+|---|---|
+| A. 手动按钮调**无参** `repaintEverything()` | ✅ 安全但**无效**（实测不带 FULL 位）|
+| B. 手动按钮调**带参** `repaintEverything(98)` | ⚠️ **有效但会 reset**（故障机 3/5 失败）；**正常机可考虑** |
+| C. 档位表加 98/108 | ❌ 无效（scope 通道 FULL 不生效，本轮复核确认）|
+| D. 周期性自动全刷 | ❌ 会周期性闪烁 **+ 周期性 reset** |
+
+```
+⇒ ★ 净结论：故障机上「整屏清残影」与「避免 reset」物理上不可兼得 ——
+   整屏清残影必须 update[1] 全屏，而全屏必然 wait all_lut_free 超时。
+⇒ 当前 launcher 现状（无参 repaint，局部重画）恰是故障机唯一安全选择，【不应改动】。
+⇒ 用户若嫌残影：现实手段是**改用 GC16 档**（清"变化区域"），整屏清除需换硬件。
+```
+
+**⑦ §6.5 可写节点：4 个全部可写（修正 HANDOFF）**
+
+| 节点 | 权限 | 原值 | 写回 | 结果 |
+|---|---|---|---|---|
+| `cut_frame_num` | `-rw-r--r--` | 0 | rc=0 | ✅ 可写 |
+| `update_disable` | `-rw-r--r--` | 0 | rc=0 | ✅ 可写 |
+| `time_test_level` | `-rw-r--r--` | 0 | rc=0 | ✅ 可写 |
+| **`debug_level`** | `-rw-r--r--` | 0 | rc=0 | ✅ **可写**（修正 HANDOFF「写入被拒」）|
+
+> ⚠️ **`debug_level` 可写是重要发现**：写 1 可恢复 `SET_EBC_SEND_UPDATE` 等被抑制的 printk，
+> **便于日后诊断**。但会加剧 dmesg 压力（当前已被 `dump_lcdc_state` 淹没）——
+> **本轮刻意未写非 0 值**，避免污染现场；建议在专门诊断会话中启用。
+
+**⑧ 本轮最大工具收获：两个新观测手段**
+
+```bash
+# (a) 直接读 SF→EPDC 的真实波形/更新模式（不受 dmesg 淹没影响）
+adb logcat -d | grep 'update_to_display'
+
+# (b) 分离调用两个 repaintEverything 重载（新增工具，源码 _scratch_gs/RepaintAll.java）
+CLASSPATH=/data/local/tmp/repaint.dex app_process /system/bin io.onyx.RepaintAll       # 无参
+CLASSPATH=/data/local/tmp/repaint.dex app_process /system/bin io.onyx.RepaintAll 98    # 带参
+```
+
+**⑨ 工具踩坑补充（本轮新增）**
+
+| 坑 | 现象 | 正确做法 |
+|---|---|---|
+| `su -c "…\r…"` 嵌套引号 | PowerShell 把 `tr -d "\r"` 消化成 `tr -d "r"`，**删掉脚本内所有字母 r** → 语法错误 | **整脚本 push，脚本内不嵌套 `su -c`**；外层用 `su -c sh\ /path` |
+| `dmesg` 被 `dump_lcdc_state` 淹没 | 1204/2013 行 = 60%，约 17 条/s ⇒ 缓冲仅存 ~2 分钟 | 采样后**立即**导出；或改用 `logcat \| grep update_to_display` |
+| `dmesg` 时间戳 ≠ uptime | dmesg `kt=6582` vs uptime `34270` | 用 `K = uptime_at_dump − dmesg末行kt` 标定（本机 **27687.6**，稳定可复用）|
+| 设备端 `awk` 缺 `asorti`/`strftime` | `awk: calling undefined function` | 改用 `sort` + shell 循环 |
+| `d8.bat` 用绝对路径失败 | `Illegal char <:> at index 0` | 用**相对路径**调 d8 |
+| `javac` 默认 GBK | 中文注释报「非法字符」 | 加 `-encoding UTF-8` |
 
 ### 8.1 方法
 - 工具：`_scratch_gs/relay_uc552930.py`（unicorn2 ARM64 模拟）+ `relay_uc_matrix.py`
