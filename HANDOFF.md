@@ -60,6 +60,7 @@
 | **`input swipe` 权限** | 非 root 注入报 `INJECT_EVENTS permission` | 必须 `su -c "input ..."` |
 | **PowerShell 引号嵌套** | 复杂 `su -c "..."` 里的引号被展开 | 写成 `.sh` 文件 push 过去 |
 | **adb 会掉线** | `device not found` / `unknown host service` | `adb reconnect` 或等几秒重试 |
+| ★★ **掉线后可能连上【别的设备】** | 2026-09-25 实测：Poke6 断开后，adb 上出现 `182QGFZD225UX`（**MEIZU 18s**），`device not found` 之后所有命令会打到那台机器上 | **每次重连后先确认**：`adb devices -l` + `getprop ro.product.model` 必须是 **Poke6**；**所有命令显式带 `-s 6C7F0E64`** |
 | **session temp 目录会变** | `$env:TEMP\eink_diag` 路径失效 | 用绝对路径 `C:\Users\root\AppData\Local\Temp\eink_diag` |
 | **长实验被 PowerShell timeout 打断** | 脚本中途 `Terminated`，**末尾的还原步骤可能未执行** → 设备留下非默认状态（如 `cut_frame_num` 非 0）| 用 `su -c nohup sh /data/local/tmp/x.sh > /data/local/tmp/x.log 2>&1 &` 后台跑，另起命令看日志；**事后必须核对设备状态** |
 | **shell 变量包裹整条命令** | `CMD="CLASSPATH=… app_process …"; $CMD` → `CLASSPATH=…: inaccessible or not found` | 不要把 `VAR=val cmd` 塞进变量再展开；写全或用 `env` |
@@ -531,6 +532,12 @@ cd C:\Users\root\Documents\eink
 | 8 | A2（及全屏 GC16）在正常机的表现 | 未测 —— **优先级已提升**（§6.6）：决定能否为正常机提供清残影入口 |
 | 9 | `debug_level=1` 能否恢复被抑制的诊断 printk | 未测（节点**可写**已确认，§6.5）；建议专门会话验证 |
 | 10 | `gcInterval` 周期 GC 是否真的插入 GC16 全刷 | ⚠️ **本轮未获有效证据** —— root 注入的 `input swipe` 不触发 EAC 计数入口（§9.3.25③）；需真机手触验证 |
+| 11 | 通知栏「刷新屏幕」磁贴是否 = `repaintEverything(98)` | ⚠️ **源码推断**（`UpdateMode.GC ≡ UI_GC_MODE = 98` 已确证）；**实测未完成**（Poke6 掉线）。验证：`am broadcast -a onyx.android.intent.action.REFRESH_SCREEN` 后看 `waveform_mode/update_mode`（§9.3.26）|
+| 12 | launcher 注释「等同通知栏磁贴」错误 | ⚠️ 待修：`RefreshModeHelper.fullRefreshScreen()` 用的是**无参**版（局部重画），**不等于**磁贴的全屏 GC16（§9.3.26④）|
+
+> ★ **磁贴的实用结论**（§9.3.26⑤）：磁贴是**故障机上唯一能「整屏」清残影的用户入口**，
+> 但 `update[1]` 全屏 ⇒ 必然 `wait all_lut_free` ⇒ 实测 **5 次中 3 次 reset**。
+> ⇒ 「整屏清残影」与「避免 reset」**物理不可兼得**，磁贴取前者。
 
 ---
 

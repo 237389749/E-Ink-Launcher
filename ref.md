@@ -2523,6 +2523,14 @@ reset 周期 ~1.2s       （wait 1s + reset 0.1s + powerup 快失败）
 > │  · **「降低操作频率」同日亦被否证**（间隔扫描 0.35~5.0s：无系统性差异，      │
 > │    0.35s 反而最好）⇒ **软件层没有稳定解法**（见 §9.3.25⑫⑭）              │
 > │                                                                          │
+> │ ★ **§9.3.26 通知栏「刷新屏幕」磁贴的真实行为**（源码级，实测未完成）：      │
+> │  · 磁贴 → 广播 `onyx.android.intent.action.REFRESH_SCREEN` →（推断）        │
+> │    `EpdController.repaintEveryThing(UpdateMode.GC)` → `repaintEverything(98)`│
+> │  · 已确证映射：**`UpdateMode.GC` ≡ UI 值 `98`**（`UI_GC_MODE`）           │
+> │  · ⇒ 磁贴 = **真全屏 GC16**，能整屏清残影，但故障机 **5 次中 3 次 reset**   │
+> │  · ★ **纠正**：launcher 的 `fullRefreshScreen()`（**无参**）**不等同**磁贴，  │
+> │    它只是局部重画（`waveform_mode=255, update_mode=0`）                  │
+> │                                                                          │
 > │ 已被推翻的中间论断（详见各节"更正"）：                                    │
 > │  · "改重排队波形号/坐标可根治循环" → 作废（§9.3.18④/§9.3.19⑦）          │
 > │  · "A2 是 reset 的产物" → 循环论证错误（§9.3.18⑤）                       │
@@ -5144,8 +5152,94 @@ adb shell su -c "cat /sys/class/sepdc/debug/status"
 ⇒ 唯一根治仍是**修硬件**（⑦ 第 4 项）。
 
 > ★ 补充观察（供后续查）：`Reg Enable` 并非全程出现，而是**成簇**（kt 5000~8000、9000~10310 密集，10310 之后约 8 小时为 0）。
-> 疑似与**充电状态 / 温度**相关（早先 `healthd: battery l=100 … chg=a`、`batt temp 34.4`）——
-> 若成立，则「哪些时段更容易积压」或可预测（**未验证**）。
+> **同日追查（用已抓的 dmesg 离线分析 `healthd` 行）得到候选因子 —— 电池电压**：
+>
+> | kt 桶 | `Reg Enable` | 平均电压 | kt 桶 | `Reg Enable` | 平均电压 |
+> |---|---|---|---|---|---|
+> | 5000~6000 | 34 | 4326 mV | 10000~11000 | 34 | 4310 mV |
+> | 6000~7000 | 58 | 4334 mV | **11000~12000** | **0** | **4269 mV** ↓ |
+> | 7000~8000 | 66 | 4335 mV | **12000~13000** | **0** | **4247 mV** ↓ |
+> | 9000~10000 | **124** | **4337 mV** | 当前实测 | — | **4225 mV** |
+>
+> ⇒ **坏状态 ≈ 4330 mV、好状态 ≈ 4250 mV**（差 ~80 mV），状态切换点在 kt≈11000。
+> ⇒ **温度不是区分因子**（两段都 34~35 °C）—— 此前的温度猜测被削弱。
+> ⚠️ 仅 **1 次**状态切换样本，**因果方向未定**（可能电压高→失败，也可能某电源事件同时改变二者）。
+
+---
+
+#### 9.3.26 ★★★ 通知栏「刷新屏幕」磁贴的真实行为（2026-09-25，源码级；实测未完成）
+
+> 起因：用户问「这种情况下，通知栏中的刷新屏幕磁贴还有作用吗」。
+> ⚠️ **本条结论为源码推断** —— 验证中途 **Poke6 掉线**（见 ⑦），**未能实机确认**；可信度已在各处标注。
+
+**① 完整调用链（源码）**
+
+```
+RefreshScreenTile.handleClick()
+  → BroadcastHelper.sendFullRefreshScreenBroadcast(mContext)
+  → 广播 "onyx.android.intent.action.REFRESH_SCREEN"        (BroadcastHelper.java:211)
+  → CommandQueueActionReceiver（eink-systemui，注册了该 action）
+  → ❓ onReceive 被 jadx 放弃反编译（throw new UnsupportedOperationException），链在此断
+  →（推断）EpdController.repaintEveryThing(UpdateMode.GC)
+  → ViewUpdateHelper.repaintEverything(98)
+```
+
+**② 关键映射（已确证）**
+
+```java
+// SDMDevice.java:988
+f42528w = ReflectUtil.getStaticIntFieldSafely(clsClassForName, "UI_GC_MODE");
+// SDMDevice.java:891   f42549b[UpdateMode.GC.ordinal()] = 6;
+// SDMDevice.java:2106  m22597h(): case 6 → return f42528w
+// ViewUpdateHelper.java:93
+public static final int UI_GC_MODE = 98;   // = GC16(2) | WAIT(64) | FULL(32)
+```
+
+⇒ **`UpdateMode.GC` ≡ UI 值 `98`**。
+
+**③ 官方惯例佐证（三处独立入口均用 GC）**
+
+| 位置 | 调用 |
+|---|---|
+| `eink-home/.../AppsFragment.java:306` | `EpdController.repaintEveryThing(UpdateMode.GC)` |
+| `eink-home/.../LibraryViewModel.java:463` | 同上 |
+| `prodTest/.../AgingActivity.java:1417` | 同上 |
+
+⇒ Onyx 的「刷新屏幕」标准语义 = **带 FULL 位的 GC16 全屏刷新**。
+
+**④ ★ launcher 注释与实现不符（代码级纠错）**
+
+`RefreshModeHelper.fullRefreshScreen()` 的注释称「等同通知栏刷新屏幕磁贴的一次整屏全刷」，但实测：
+
+| 调用者 | 实际调用 | 实测（`update_to_display`）| 结果 |
+|---|---|---|---|
+| launcher `fullRefreshScreen()` | `repaintEverything()`（**无参**）| `waveform_mode=255, update_mode=0` | **局部重画** |
+| 通知栏磁贴（推断）| `repaintEverything(98)` | `waveform_mode=2, update_mode=1` | **真全屏** |
+
+⇒ **两者【不等价】**。launcher 切档后那次「全刷」**不能整屏清残影**（§9.3.24④ 已实测）。
+
+**⑤ 对「磁贴还有作用吗」的回答**
+
+**有作用，且是故障机上唯一能「整屏」清残影的用户入口** —— 但**要付 reset 代价**：
+
+- 实测 `repaintEverything(98)`：**5 次中 3 次触发 reset**（§9.3.24⑤）
+- 机理：`update[1]` 全屏 ⇒ 必须等**所有** LUT 空闲 ⇒ 故障机上有 LUT 卡住 ⇒ `wait all_lut_free timeout 500 ms`
+- ⇒ 磁贴正是 §9.3.25⑭ 结论的实例：**「整屏清残影」与「避免 reset」物理不可兼得** —— 磁贴取前者
+
+**⑥ 待验证（Poke6 重新接入后即可闭环）**
+
+```bash
+adb shell su -c "am broadcast -a onyx.android.intent.action.REFRESH_SCREEN"
+adb logcat -d | grep update_to_display
+#  期望 waveform_mode = 2, update_mode = 1  ⇒ 推断证实（同时观察是否 raise reset）
+```
+
+**⑦ 本轮环境事件：Poke6 掉线（重要）**
+
+验证进行到一半时 `6C7F0E64` 断开，adb 上出现 **`182QGFZD225UX`（product `meizu_18s_CN`, model `MEIZU_18s`）**。
+⇒ 再次印证 HANDOFF §10 的警告：**动手前必须 `getprop ro.product.model` 确认是 Poke6**。
+本轮所有命令均显式带 `-s 6C7F0E64`，故前述数据不受影响；**未对那台魅族设备执行任何操作**。
+⇒ 待查：Poke6 是「重启」还是「断线」—— 接回后先看 `uptime` 与 `persist.sys.boot.reason.history`。
 
 ### 8.1 方法
 - 工具：`_scratch_gs/relay_uc552930.py`（unicorn2 ARM64 模拟）+ `relay_uc_matrix.py`
