@@ -541,6 +541,9 @@ cd C:\Users\root\Documents\eink
 | 14 | 「快 + 有灰阶」是否存在 | ✅ **已定论：不存在**。A2(5)/DU(22) 无灰阶；**DU4(24帧/4级灰) 可用但 reset +14/轮**（死亡谷）；`cut_frame_num` 对 slot-7 无效（§9.3.28①②③）|
 | 15 | 综合调理建议 | ⚠️ 用户需要：**DU（快）** 或 **GC16（灰阶+清残影）**二选一；清残影仅 GC16，且整屏清残影（磁贴/`applyGCOnce`/gcInterval）在故障机**必 reset** |
 | 16 | FULL(32) 能与哪些波形组合 | ✅ **已定论**：只被**全摆动类**接受 —— `98`(GC16) / `108`(DEEP_GC16) 能全屏；`33/97/99/100/104`（DU/GC4/A2/DU4 + FULL）**返回 OK 但零全屏**（两次复现）。差分模式 state 覆盖不足 ⇒ 物理无法整屏（§9.3.28⑨）|
+| 17 | EAC「刷新」页各项是否影响卡顿 | ✅ **对照表已建**（§9.3.29②）：7 项含 `gcInterval`(20) / `gcAfterScrolling`(true) / `useGCForNewSurface`(false) 等。**权威源 = `/onyxconfig/mmkv/onyx_config`** |
+| 18 | 「页面拖动停止后全刷」是否清残影 | ✅ **实测：A2 模式下不清**（只调 `clearTransientUpdate`，零 reset）。⚠️ 但**需拖动式交互**（网页/翻页=滑动）才触发，`input swipe` 测不到（§9.3.29③）|
+| 19 | 「把动画都过滤」能否全部无动画 | ✅ **已定论：eink 侧做不到**。`animationDuration`=debouncer 下限、`byPassAnimation()`=**冻结刷新**（非跳过）；动画帧由 app 渲染，eink 只能改"如何显示"。另发现 **launcher `byPass(0)` 硬清零不符引用计数语义**（隐患，§9.3.29⑦）|
 
 > ★ **磁贴的实用结论**（§9.3.26⑤）：磁贴是**故障机上唯一能「整屏」清残影的用户入口**，
 > 但 `update[1]` 全屏 ⇒ 必然 `wait all_lut_free` ⇒ 实测 **5 次中 3 次 reset**。

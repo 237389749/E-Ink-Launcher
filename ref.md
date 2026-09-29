@@ -2545,6 +2545,19 @@ reset 周期 ~1.2s       （wait 1s + reset 0.1s + powerup 快失败）
 > │    `33/97/99/100/104`(DU/GC4/A2/DU4 + FULL) 一律**返回 OK 但零全屏**       │
 > │    ⇒ 差分模式 state 覆盖不足（A2 18/256）⇒ 物理上无法整屏驱动（§9.3.28⑨）  │
 > │                                                                          │
+> │ ★ **§9.3.29 EAC「刷新」页 7 项对照表（设备 MMKV 实测）**：                  │
+> │  · 权威数据在 **`/onyxconfig/mmkv/onyx_config`**（含每个 app 的 EAC JSON）  │
+> │  · 5+2 项：`animationDuration`(20) / **`gcInterval`(20→全屏GC16)** /        │
+> │    `refreshModeIndex`(mode_3) / `useGCForNewSurface`(false) /               │
+> │    `repaintLatency`(500) / **`gcAfterScrolling`(true)** / 拖动极速模式      │
+> │  · ★「**页面拖动停止后全刷**」**名不副实**：A2 滚动模式下只调                │
+> │    `clearTransientUpdate()`（实测**不清残影、零 reset**）；只有              │
+> │    `scrollingRefreshMode=0` 才走 `applyGCOnce()`（全屏 GC16 → reset +4）    │
+> │  · ⚠️ 该项需**拖动式交互**（网页/翻页=滑动）才触发，`input swipe` 注入测不到  │
+> │  · **「无动画」eink 侧做不到**：`animationDuration` 是 debouncer 下限、           │
+> │    `byPassAnimation()` 是**冻结刷新**（非跳过）；动画帧由 app 渲染，           │
+> │    eink 只能改"如何显示"、不能阻止"产生"（§9.3.29⑦）                        │
+> │                                                                          │
 > │ 已被推翻的中间论断（详见各节"更正"）：                                    │
 > │  · "改重排队波形号/坐标可根治循环" → 作废（§9.3.18④/§9.3.19⑦）          │
 > │  · "A2 是 reset 的产物" → 循环论证错误（§9.3.18⑤）                       │
@@ -5552,6 +5565,195 @@ CLASSPATH=/data/local/tmp/vu.dex app_process /system/bin io.onyx.VU setGcRefresh
 
 即便 FULL 位能附到 A2，也不划算 —— A2 的 state 覆盖仅 **18/256**，
 就算全屏也只驱动约 7% 的像素，**"清残影"等于没清**。
+
+---
+
+#### 9.3.29 ★★★ 第五会话：EAC「刷新」页全部可调项对照表 + `gcAfterScrolling` 实测（2026-09-29）
+
+> 起因：用户问「优化引擎 → 个性化 → 刷新」页那几项可调项有没有影响，要求查清完整对照关系。
+> **产出：7 项的 UI 名 ↔ 配置字段 ↔ 设备实测值 对照表；并实测否证 `clearTransientUpdate` 的清残影作用。**
+
+**① ★ 权威数据来源：设备 MMKV 里每个 app 的完整 EAC 配置**
+
+```bash
+# 路径（MMKV 格式，含全部 app 的 EAC JSON）
+adb shell su -c "strings /onyxconfig/mmkv/onyx_config | grep eac_default_app_config"
+# 或直接拉回本地分析（2MB）
+adb shell su -c "cp /onyxconfig/mmkv/onyx_config /sdcard/" && adb pull /sdcard/onyx_config
+```
+实测：`refreshConfig` / `gcInterval` / `useGCForNewSurface` / `antiFlicker` / `repaintLatency`
+各出现 **920 次**（= 每个已配置 app 一份）。
+
+**② 「刷新」页项目对照表（7 项）**
+
+UI 构建：`EACItemBaseViewModel` 的 `case 7/8/9-10/24/25`；
+配置结构：`refreshConfig` + `noteConfig` + `extraConfig`。
+
+| # | 中文 UI 名 | 英文 | 配置字段（所在段）| **设备实测值** | 作用 | 故障机风险 |
+|---|---|---|---|---|---|---|
+| 1 | 动画过滤 | Animation Filter | `animationDuration`（refreshConfig）| **20** | 按翻页动画时长过滤（**仅 Normal 模式有效**）| 低 |
+| 2 | **全刷频率** | Full-refresh Frequency | `gcInterval`（refreshConfig）| **20** | 每 N 次输入 → **全屏 GC16**（§9.3.27）| ⚠️ **会 reset** |
+| 3 | 刷新模式 | Refresh Modes | `refreshModeIndex`（refreshConfig）| `"refresh_mode_3"` | 波形档 | 取决于档位 |
+| 4 | **切页自动全刷** | Automatically full-refresh when switching pages | `useGCForNewSurface`（refreshConfig）| **false** | 切页时全刷 | ⚠️ 开启则 reset |
+| 5 | 手写笔抬起延迟 | Refresh Delay after Lifting Stylus | `repaintLatency`（noteConfig）| **500** | 仅 Normal/Regal 模式 | 低 |
+| 6 | **页面拖动停止后全刷** | Full Refresh after Drag Page | `gcAfterScrolling`（extraConfig）| **true** | 拖动结束后的 GC —— **见 ③** | ⚠️ 见 ③ |
+| 7 | 页面拖动时切换到极速模式 | Switch to Speed Mode when dragging | `eac_item_screen_refresh_during_dragging` | — | 拖动时瞬态加速 | 低 |
+
+**运行时可通过 `EInkHelper` 读到（`gc.dex` 实测）**：
+```
+getGcInterval() = 20          getAnimationDuration() = 20
+getAntiFlicker() = 10         getScrollingRefreshMode() = 2  (A2)
+getGlobalContrast() = 30      getMonoLevel() = 10
+```
+
+**③ ★ `gcAfterScrolling`（页面拖动停止后全刷）的真相 —— 实现名不副实**
+
+源码（`ScrollHelper.java:142-153`）：
+```java
+private void exitScrollRefreshModeImpl() {
+    boolean gcAfterScrolling = ...isGcAfterScrolling();   // 设备 = true
+    int refreshMode = EinkHelper.getScrollingRefreshMode(); // 设备 = 2 (A2)
+    if (refreshMode != 0) {
+        if (refreshMode == 2 || refreshMode == 4) {
+            ViewUpdateHelper.clearTransientUpdate(gcAfterScrolling);  // ★ 设备走这条
+        }
+    } else if (gcAfterScrolling) {          // 只有 scrollingRefreshMode==0 才走
+        ViewUpdateHelper.applyGCOnce();     // 真正的全屏 GC16
+        ViewUpdateHelper.repaintEverything();
+    }
+}
+```
+
+**实测（本轮）**：
+
+| 组 | 调用 | 波形 | reset |
+|---|---|---|---|
+| A：设备当前路径（`refreshMode=2`+gc=true）| `clearTransientUpdate(true)` | 全 **DU 局部** | **0** |
+| B：对照组 | `clearTransientUpdate(false)` | 全 DU 局部 | 0 |
+| C：`refreshMode=0` 分支 | `applyGCOnce()` + `repaintEverything()` | **1× 全屏 GC16** | **+4** ❌ |
+
+⇒ **`clearTransientUpdate()` 的语义 = 退出瞬态更新模式，不是清残影** —— A/B 两组**零差异**。
+⇒ ⇒ **开关名叫「页面拖动停止后全刷」，但在 A2 滚动模式下它并不全刷**（名不副实）。
+⇒ 只有把 `scrollingRefreshMode` 改成 **0** 才会走 `applyGCOnce()` 分支 —— 但那会 reset +4。
+
+> ⚠️ **重要限定（用户 2026-09-29 指出）**：本项需要**拖动式交互**才触发
+> （浏览网页、或翻页方式设为「滑动」）。本轮用 `input swipe` 注入的是**一次快速滑动**，
+> **不走拖动路径**，故 **A/B 两组都测不到差异是"未触发"而非"无效果"** —— 结论以此限定为准。
+
+**④ 设备实测的 `eac_extra_*` 键值（MMKV 原始字节）**
+
+| 键 | 值 | 解读 |
+|---|---|---|
+| `eac_extra_gc_after_scrolling` | `0x01` | **true** |
+| `eac_extra_gc_after_scrolling_delay_time` | `0x0bdc` = **3036** ms | 延迟（代码里被 `getAccessibilityTouchEventDelay()` 覆盖，**疑字段复用，未确证**）|
+| `gc_after_scrolling_refresh_mode` | `0x02` | A2 |
+| `eac_extra_config_enable` | `0x01` | true |
+| `eac_extra_refresh_mode` | `0x01` | — |
+
+**⑤ 每个 app 的 `refreshConfig` 完整字段（实测，920 份一致）**
+
+```json
+"refreshConfig": {
+  "animationDuration": 20,        "antiFlicker": 10,      "enable": true,
+  "gcInterval": 20,               "refreshModeIndex": "refresh_mode_3",
+  "supportRegal": false,          "turbo": 0,
+  "updateMode": 0,                "useGCForNewSurface": false
+}
+```
+> ★ **注意 `updateMode: 0`** = EAC 逻辑 **NORMAL(0)**，在 `DEBOUNCER_UPDATE_MODE_MAP = {0,3,5}` 白名单内
+> ⇒ debouncer / 周期 GC / dither **全部启用**。
+> ⚠️ 这与 launcher 的 `applyFixedEac()` 定死 **3（REGAL）** 是**两套配置**（launcher 只改 top app + fallback）。
+
+**⑥ 提取方法（供复现）**
+
+```bash
+adb shell su -c "cp /onyxconfig/mmkv/onyx_config /sdcard/" && adb pull /sdcard/onyx_config
+python -c "
+import re,json
+d=open('onyx_config','rb').read()
+i=d.find(b'eac_default_app_configcom.qidian')
+seg=d[i:i+3000]; j=seg.find(b'{'); depth=0
+for x in range(j,len(seg)):
+    if seg[x:x+1]==b'{': depth+=1
+    elif seg[x:x+1]==b'}':
+        depth-=1
+        if depth==0:
+            print(json.dumps(json.loads(seg[j:x+1].decode())['globalActivityConfig']['refreshConfig'],ensure_ascii=False)); break
+"
+```
+
+**⑦ ★★ 「能不能全部无动画」—— 实测结论：eink 侧做不到**
+
+> 用户问：「把动画都过滤能否全部无动画」。
+> **答：不能。`animationDuration` / `antiFlicker` 都不是"动画开关"；eink 侧 API 只能改变动画帧"如何被显示"，无法阻止 app 产生它们。**
+
+**① `animationDuration` 的真实语义 = debouncer 的 `shortDelay` 下限（不是过滤动画）**
+
+```java
+// AccessibilityHelper.java:63-68
+int shortDelay = upOrCancel ? animationDuration : animationDuration + 10;
+if (animationDuration >= 120) { longDelay = animationDuration + 50; }
+// TabletEACRefreshImpl.java:186 / OnyxEpdBypassManager.java:177,190
+int shortDelay = Math.max(EACConfig.singleton().getMinAnimationDuration(),
+                          getAnimationDurationFromConfig(refreshConfig));   // ← 【下限】语义
+```
+UI 自述也印证：`eac_item_animation_duration_sub_label` = "Filter by page-turn animation time
+(**Only valid for Normal Refresh Mode**)" —— "Filter" 指的是 **debouncer 门禁参数**，不是"消除动画"。
+
+**② 实测：改 `animationDuration` / `antiFlicker` 对翻页提交数无显著影响**
+
+严格控制变量（同页面、各组重复 2 次、顺序打乱）：
+
+| 组 | `animationDuration` / `antiFlicker` | 翻页提交数 |
+|---|---|---|
+| base | 20 / 10 | 18*, 9 |
+| anim300 | 300 / 10 | 8, 9 |
+| anim0 | 0 / 10 | 9, 9 |
+| flick32 | 20 / 32 | 10, 10 |
+| flick0 | 20 / 0 | 9, 9 |
+
+（* `base#1` 的 18 是首次进入页面的偶发；其余全部 8~10，**无系统性差异**。）
+
+> ⚠️ 正确调用入口是 **`EInkHelper`**（服务层），不是 `ViewUpdateHelper` ——
+> `ViewUpdateHelper` 里**没有** `animationDuration` 方法（首次误调用报 `NoSuchMethodException`，实验作废）。
+
+**③ `byPassAnimation()` = 冻结刷新，不是"跳过动画"**
+
+源码（`ViewUpdateHelper.java:1042-1048`）：
+```java
+public static void byPassAnimation()      { byPass(20);  }   // 计数 +20
+public static void resetAnimationBypass() { byPass(-20); }   // 计数 -20
+```
+⇒ 只是 **`byPass` 引用计数的 ±20**，且**全仓无人调用**（孤儿）。
+
+实测：
+
+| 步骤 | 操作 | frame 增量 | 说明 |
+|---|---|---|---|
+| 1 | `byPassAnimation()` | **0** ⛔ | **刷新完全冻结**（提交了 2 条，但 frame 不动）|
+| 2 | 再一次 `byPassAnimation()` | **0** ⛔ | 仍冻结 |
+| 3 | `resetAnimationBypass()`（-20）| **+44** ✅ | 恢复，**一次性补刷积压的 44 帧** |
+| 4 | 再一次（归零）| **+22** ✅ | 正常 |
+
+⇒ **与"无动画"的目标相反**：`byPass` 的语义是「**期间什么都不显示，最后一次性跳变**」，
+   而「无动画」期望的是「立刻显示最终画面」。两者不等价。
+
+**④ 根本限制（本轮查清的边界）**
+
+```
+翻页动画 = app 自己渲染的帧序列（阅读器绘制过渡效果）
+eink 侧 API 只能改变这些帧【如何被显示】（合并 / 延迟 / 冻结）
+          无法阻止 app 【产生】它们
+⇒ 「无动画」只能在 app 侧实现（如 Legado 自带"无动画翻页"设置）
+```
+
+**⑤ 副产品（★ 值得记录的隐患）：`byPass` 的引用计数语义**
+
+- `byPassAnimation` / `resetAnimationBypass` 成对用 **±20**（而非 ±1）⇒ 设计为**粗粒度配对**
+- 实测：计数 20 → （-20）→ 0 **即恢复**；再 -20 变负也不报错
+- ⚠️ **launcher 的 `RefreshModeHelper.doApplyWithBypass()` 用 `byPass(10)` / `byPass(0)`** ——
+  其中的 **`byPass(0)` 是硬清零，不符合引用计数语义** ⇒ 若别处也持有 bypass 计数，
+  launcher 会**无视他人持有强行恢复**。**潜在隐患，建议改为配对调用（`byPass(0+10)` → `byPass(-10)`）**。
 
 ### 8.1 方法
 - 工具：`_scratch_gs/relay_uc552930.py`（unicorn2 ARM64 模拟）+ `relay_uc_matrix.py`
