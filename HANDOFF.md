@@ -63,7 +63,9 @@
 | ★★ **掉线后可能连上【别的设备】** | 2026-09-25 实测：Poke6 断开后，adb 上出现 `182QGFZD225UX`（**MEIZU 18s**），`device not found` 之后所有命令会打到那台机器上 | **每次重连后先确认**：`adb devices -l` + `getprop ro.product.model` 必须是 **Poke6**；**所有命令显式带 `-s 6C7F0E64`** |
 | **session temp 目录会变** | `$env:TEMP\eink_diag` 路径失效 | 用绝对路径 `C:\Users\root\AppData\Local\Temp\eink_diag` |
 | **长实验被 PowerShell timeout 打断** | 脚本中途 `Terminated`，**末尾的还原步骤可能未执行** → 设备留下非默认状态（如 `cut_frame_num` 非 0）| 用 `su -c nohup sh /data/local/tmp/x.sh > /data/local/tmp/x.log 2>&1 &` 后台跑，另起命令看日志；**事后必须核对设备状态** |
-| **shell 变量包裹整条命令** | `CMD="CLASSPATH=… app_process …"; $CMD` → `CLASSPATH=…: inaccessible or not found` | 不要把 `VAR=val cmd` 塞进变量再展开；写全或用 `env` |
+| **shell 变量包裹整条命令** | `CMD="CLASSPATH=… app_process …"; $CMD` → `CLASSPATH=…: inaccessible or not found` | 不要把 `VAR=val cmd` 塞进变量再展开；写全或用 `env`。⚠️ **已连着踩 3 次**（§9.3.25⑪ → §9.3.27⑤ → 本轮）—— **脚本里每处都写完整命令**，别为省字用变量 |
+| ★★ **读抓取文件前先核对时间戳** | 2026-09-29 曾把 `/data/local/tmp/live_all.log`（**09-28 01:50 就停了**）当成"刚才的重启证据"分析，结论全错 | **先比对文件 mtime 与设备当前时间**（`ls -la` + `date`）；不一致即说明抓取已中断，需重新部署 |
+| ★★ **A/B 对照必须控制变量** | dither 对比时用「翻页后截图」，内容与设置同时变 ⇒ 得出「PNG 大 2.4 倍」的错误结论 | 同一页面**只改待测变量**；本轮正解是「不翻页、各连拍 2 张比字节数」|
 | **PowerShell 内联 shell 语法** | `for f in …; do …; done` / `\$f` → `syntax error: unexpected 'do'`、`\$f` 被本地展开成 `C:\sys\…` | 整脚本 `push` 执行；或改用 PowerShell `foreach` 逐条调 adb |
 | ★ **跨时间窗口对比（本轮踩坑）** | 把「A 时刻的快翻」与「B 时刻的 idle」相比 ⇒ 得出「降低操作频率有效」的**错误结论**（实际是**硬件状态变了**，不是节奏变了）| 对照组必须**在同一时间窗口内交替进行**（顺序打乱）；任何跨时刻得出的结论，都要做**反向顺序复验**（本轮 `setUpdListSize` 与「降低操作频率」两条结论都是这样被推翻的）|
 
@@ -531,13 +533,20 @@ cd C:\Users\root\Documents\eink
 | 7 | 是否有"清残影"的 dt 开关 | ✅ **已查清：`a2-clean-mode` 等均不存在**（§6.2）|
 | 8 | A2（及全屏 GC16）在正常机的表现 | 未测 —— **优先级已提升**（§6.6）：决定能否为正常机提供清残影入口 |
 | 9 | `debug_level=1` 能否恢复被抑制的诊断 printk | 未测（节点**可写**已确认，§6.5）；建议专门会话验证 |
-| 10 | `gcInterval` 周期 GC 是否真的插入 GC16 全刷 | ⚠️ **本轮未获有效证据** —— root 注入的 `input swipe` 不触发 EAC 计数入口（§9.3.25③）；需真机手触验证 |
+| 10 | `gcInterval` 触发时插什么 | ✅ **源码确证 = `repaintEverything(98)` 全屏 GC16**（§9.3.27③，推翻"局部"旧记录）。⚠️ 但实现类 `EpdcUpdateDebounceWithDelay` 是**孤儿**；且 root 注入**无法复现**（§9.3.25③）|
 | 11 | 通知栏「刷新屏幕」磁贴是否 = `repaintEverything(98)` | ⚠️ **源码推断**（`UpdateMode.GC ≡ UI_GC_MODE = 98` 已确证）；**实测未完成**（Poke6 掉线）。验证：`am broadcast -a onyx.android.intent.action.REFRESH_SCREEN` 后看 `waveform_mode/update_mode`（§9.3.26）|
 | 12 | launcher 注释「等同通知栏磁贴」错误 | ⚠️ 待修：`RefreshModeHelper.fullRefreshScreen()` 用的是**无参**版（局部重画），**不等于**磁贴的全屏 GC16（§9.3.26④）|
+| 13 | **gcInterval 是否为卡顿/reset 触发源** | ⚠️ **未验证** —— 建议把 UI「Full-refresh Frequency」设 **0**（= 阈值 MAX_VALUE = 永不触发）做 A/B 对照（§9.3.27⑥，**零风险**）|
+| 14 | 「快 + 有灰阶」是否存在 | ✅ **已定论：不存在**。A2(5)/DU(22) 无灰阶；**DU4(24帧/4级灰) 可用但 reset +14/轮**（死亡谷）；`cut_frame_num` 对 slot-7 无效（§9.3.28①②③）|
+| 15 | 综合调理建议 | ⚠️ 用户需要：**DU（快）** 或 **GC16（灰阶+清残影）**二选一；清残影仅 GC16，且整屏清残影（磁贴/`applyGCOnce`/gcInterval）在故障机**必 reset** |
 
 > ★ **磁贴的实用结论**（§9.3.26⑤）：磁贴是**故障机上唯一能「整屏」清残影的用户入口**，
 > 但 `update[1]` 全屏 ⇒ 必然 `wait all_lut_free` ⇒ 实测 **5 次中 3 次 reset**。
 > ⇒ 「整屏清残影」与「避免 reset」**物理不可兼得**，磁贴取前者。
+>
+> ★ **三条「清残影」路径殊途同归**（§9.3.27/§9.3.28）：
+> 通知栏磁贴 / `applyGCOnce()` / gcInterval 全刷 —— **都是全屏 GC16 `repaintEverything(98)`**，
+> 在故障机上都必然 reset。**不存在**「局部清残影」这条路。
 
 ---
 

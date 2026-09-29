@@ -2531,6 +2531,17 @@ reset 周期 ~1.2s       （wait 1s + reset 0.1s + powerup 快失败）
 > │  · ★ **纠正**：launcher 的 `fullRefreshScreen()`（**无参**）**不等同**磁贴，  │
 > │    它只是局部重画（`waveform_mode=255, update_mode=0`）                  │
 > │                                                                          │
+> │ ★ **§9.3.27/§9.3.28（第四会话）「快+灰阶」与 gcInterval**：                │
+> │  · **「Full-refresh Frequency」= gcInterval**，UI 唯一入口 **0~50**        │
+> │    （`EinkSetValueDialog` type=6）→ `EACAppConfig`+全局 fallback，即时生效 │
+> │  · 其实现是 **`repaintEverything(98)` 全屏 GC16**（非局部！§9.3.20 已勘误）│
+> │  · 但实现类 `EpdcUpdateDebounceWithDelay` 是**孤儿**（外部零调用）         │
+> │  · ★ **「快 + 有灰阶」物理上不存在**：A2(5) / DU(22) 都无灰阶；            │
+> │    **DU4(24帧/4级灰) 可用但 reset +14/轮（死亡谷）**；cut 对 slot-7 无效   │
+> │  · ⇒ 只剩两个极端：**DU（快·无灰阶）** / **GC16（16级灰·唯一清残影）**      │
+> │  · 任何「清残影」路径 = 全屏 `update[1]` = 故障机必 reset（磁贴/applyGCOnce │
+> │    /gcInterval 三条路殊途同归）                                          │
+> │                                                                          │
 > │ 已被推翻的中间论断（详见各节"更正"）：                                    │
 > │  · "改重排队波形号/坐标可根治循环" → 作废（§9.3.18④/§9.3.19⑦）          │
 > │  · "A2 是 reset 的产物" → 循环论证错误（§9.3.18⑤）                       │
@@ -3623,6 +3634,14 @@ su -c "CLASSPATH=/data/local/tmp/ssmode.dex app_process /system/bin io.onyx.SetS
 ⇒ **无法扩展出 DU4**（它只在显式全刷路径出现，而那条路径会卡）。
 ⇒ **Poke6 上"全局刷新模式"的可调维度已穷尽**，扩充档位不会产生新表现。
 
+> ⚠️ **★ 勘误（2026-09-29，§9.3.28①）**：本节②「**scope 通道拿不到 DU4**」**【已推翻】**。
+> 实测 `scope=2312`（= `DU4(8)|DITHER(256)|Y1(2048)`，**两位必须齐备**）在正常翻页下
+> **确实落 `waveform_mode=8`（DU4）**：`update_mode=0` 局部、`frame` 增 +23（≈24 帧）、两次独立复现。
+> （只给 `264` = `DU4|DITHER` 仍会回落 GC16。）
+> ⇒ 但 **DU4 在故障机会卡死**：同窗口交替对照 DU4 = reset **+14/+15**，DU = **0** ⇒ **死亡谷**（§9.3.28②）。
+> ⇒ 故本节「最终结论」的**实用判断仍成立**（DU4 不可用），但**机制表述需修正** ——
+>   不是"拿不到"，而是"拿到了也不能用"。另见 §9.3.14① 表中「264 → `[7]`/24 ✅」本就记录过 repaint 路径可拿到。
+
 #### 9.3.15 ★★★ 修正：波形库里有 4 种独立波形（2026-09-23，回答 mode2/mode4/mode6 之问）
 
 > ⚠️ **修正 §9.3.13 的表述**：那里说"只有 2 种物理波形"，**混淆了两个层面** ——
@@ -4089,7 +4108,13 @@ TabletEACRefreshImpl:188
 | 场景 | 后果 |
 |---|---|
 | **关闭**（EAC mode ∉{0,3,5}，如旧代码的 DU/A2/X 档）| ① `increaseRepaintCount` 直接 return → 计数器不增 → **永不触发 GC 清残影**<br>② `applyDebouncerTransientUpdateMode` 也不执行 → **滚动瞬态加速也失效**<br>③ `applyDither` 里同样门禁 → **dither 被强制关**（§9.3.7）<br>⇒ **残影无上限累积 + 滚动变慢 + 失去抖动灰度** |
-| **启用**（mode ∈{0,3,5}，当前定死 3）| 每 20 次输入触发一次 GC 全刷（其模式恒为 `toEpdMode(0)`=AUTO=GC16 局部，实测 reset 0）|
+| **启用**（mode ∈{0,3,5}，当前定死 3）| 每 20 次输入触发一次 GC 全刷 —— ⚠️ **模式已勘误，见下** |
+
+> ⚠️ **★ 勘误（2026-09-29，§9.3.27③）**：上表「其模式恒为 `toEpdMode(0)`=AUTO=GC16 **局部**，实测 reset 0」
+> **【作废】**。源码确证实际实现是 **`applyUpdateMode(98)` = `repaintEverything(98)` = 全屏 GC16**
+> （`EpdcUpdateDebounceWithDelay.java:103-107`，注释即 `"refresh screen with fullupdate."`）。
+> ⇒ 该路径与磁贴（§9.3.26）、`applyGCOnce()`（§9.3.28⑤）**同一条** ⇒ **故障机上会 reset**。
+> ⇒ 另：该实现类经全仓搜索为**孤儿**（外部零调用），故「当前是否运行」未能确证。
 
 **④ 由此解释的历史现象**
 
@@ -5240,6 +5265,229 @@ adb logcat -d | grep update_to_display
 ⇒ 再次印证 HANDOFF §10 的警告：**动手前必须 `getprop ro.product.model` 确认是 Poke6**。
 本轮所有命令均显式带 `-s 6C7F0E64`，故前述数据不受影响；**未对那台魅族设备执行任何操作**。
 ⇒ 待查：Poke6 是「重启」还是「断线」—— 接回后先看 `uptime` 与 `persist.sys.boot.reason.history`。
+
+---
+
+#### 9.3.27 ★★★ 第四会话：「Full-refresh Frequency」（gcInterval）的底层逻辑 + UI 对应关系（2026-09-29）
+
+> 起因：用户问「控制引擎里有个『点击多少次就刷新』的选项，底层逻辑是？」并要求查清 **Interval 与 UI 的对应关系**。
+> **结论：它 = GC16 全屏刷新（`repaintEverything(98)`）；UI 只有一个入口（0~50），旧记录的「局部 / reset 0」被推翻。**
+> ⚠️ 本轮**未能实机复现**触发（root 注入不触发 EAC 计数，§9.3.25③），故触发路径属**源码确证 + 未能实测**。
+
+**① UI 入口（源码确证）**
+
+| 层 | 位置 | 内容 |
+|---|---|---|
+| 字符串 | `eac_item_gc_interval_label` | **"Full-refresh Frequency"** |
+| 字符串 | `eac_item_gc_interval_sub_label` | **"Full-refresh by the number of operations"** ← 用户看到的副标题 |
+| 对话框 | `EinkSetValueDialog.java:88-93`（`type=6`）| `getGcInterval()` / `min=0` / **`max=50`** / 标题用上面的 sub_label |
+| 写入 | `EinkSetValueDialog.java:163-164`（`type=6`）| `refreshHelper.setGcInterval(this.value)` |
+| 唤起 | `OnyxStatusBarImpl.handleEinkSetValueDialog(type, isColorSlider)` → `new EinkSetValueDialog(ctx, type)` |
+| 关闭后 | `EinkSetValueDialog.restoreView()` `case 6` | 发广播 `onyx.action.SHOW_REFRESH_MODE_SETTINGS` 回到刷新设置页 |
+
+**② 完整读写链（源码确证）**
+
+```
+UI  EinkSetValueDialog (type=6, 0~50)
+ └→ OnyxRefreshModeHelper.setGcInterval(i)              :83   getGcInterval() :79
+     └→ EInkHelper.setGcInterval(interval)              :1192  getGcInterval() :1204
+         └→ OECService.setGcInterval(interval)          （SystemServer 进程）
+             └→ setGcIntervalImpl(interval):
+                  appConfig.setGcInterval(getCurrentTopComponent(), interval)      ← ① 当前 top app
+                  editableConfig.getFallbackRefreshConfig().setGcInterval(interval) ← ② 全局 fallback
+                  getRefreshImpl().applyDebouncerParameter(...)                     ← ③ 即时生效
+                  saveDeviceConfig(editableConfig, 2)                               ← ④ 持久化
+```
+
+读取侧（`OECService.getGcInterval()`）：
+```java
+EACRefreshConfig c = getEditableDeviceConfig().getRefreshConfig(getCurrentTopComponent());
+if (!c.isEnable()) return -1;     // ★ EAC 未启用 → -1（UI 会显示 -1）
+```
+
+⇒ **落点是「当前 top app 的 activity config」+ 「全局 fallback」两处**（与 §9.3.6 的 EAC 双层结构一致）。
+⇒ **改完即时生效**（`applyDebouncerParameter`），无需重启 —— 这点与 EAC 的 updateMode 不同（后者需重启，§13.1）。
+
+**③ ★ 触发行为：GC16 全屏（推翻 §9.3.20 的「局部 / reset 0」记录）**
+
+```java
+// EpdcUpdateDebounceWithDelay.java —— 唯一实现「按次数触发刷新」的类
+:103  if (this.repaintCount >= ...getRefreshConfig().getGcInterval()) {
+:104      debug("refresh screen with fullupdate.");
+:105      applyUpdateMode(98);        // ★★ 98 = GC16(2)|WAIT(64)|FULL(32)
+:107      this.repaintCount = 0;     // 计数清零
+      } else {
+:110      refreshWithMode();          // 未达阈值：用配置的模式
+      }
+:148  private void applyUpdateMode(int m) {
+:149      int m2 = beforeApplyUpdateMode(m);      // 6(REGAL) → 5(none)，或首次放行 REGAL
+:151      ViewUpdateHelper.repaintEverything(m2); // ★ 带参版 = FULL 位生效的那条
+      }
+```
+
+⇒ **达成阈值时走 `repaintEverything(98)` = 全屏 GC16**，与通知栏磁贴（§9.3.26）、
+   `applyGCOnce()`（§9.3.28）**是同一条路径**。
+⇒ ⇒ **旧记录 §9.3.20③「其模式恒为 `toEpdMode(0)`=AUTO=GC16 局部，实测 reset 0」【作废】**。
+
+**④ ⚠️ 但该实现类是【孤儿】（外部零调用）**
+
+对 `EpdcUpdateDebounceWithDelay` 全仓搜索：**除自身外无任何引用**。
+⇒ 上述「全屏 GC16」是**设计意图的确证**，但**当前是否运行未知**。
+
+真正在跑的是另一条链（给 **SF 侧**计数器 +1）：
+```java
+// EACBaseRefreshImpl.java:106
+ViewUpdateHelper.debounceIncRefresh();   → SF 事务 DEBOUNCE_INC_REFRESH
+// 门禁：DEBOUNCER_UPDATE_MODE_MAP = {0→0, 3→0, 5→0}   ← EAC mode ∈ {0,3,5} 才继续
+```
+⇒ SF 侧拿到 `gcInterval` 后**自行**在达标时插入 GC（插入什么由 native 决定，**用户态看不到**）。
+
+**⑤ 实测尝试与失败（诚实记录）**
+
+用 `vu.dex`（§9.3.28）手动推计数，三组对照：
+
+| 组 | 操作 | 结果 |
+|---|---|---|
+| `debouncer(true, gcInterval=2)` + `debounceIncRefresh()` ×2 + 翻页 | 期望触发 GC16 | **全 DU、reset 0** ❌ 未触发 |
+| `debouncer(gcInterval=1)` + `inc` ×1 + 翻页 | 同上 | 全 DU、reset 0 ❌ |
+| 只有 `debouncer` 无 `inc`（对照）| 不应触发 | 全 DU ❌ |
+
+⇒ **手动调 API 无法复现** —— 与 §9.3.25③ 一致：**EAC 的输入计数走 app 进程 accessibility 路径，root 侧注入无法模拟**。
+
+**⑥ ★ 可操作的验证建议（零风险 A/B）**
+
+**把 UI 上「Full-refresh Frequency」设为 0**：
+- 源码语义：`obtainLegalGcInterval()` = `gcInterval > 0 ? gcInterval : MAX_VALUE`
+- ⇒ **设 0 = 阈值变为 MAX_VALUE = 事实上永不触发 GC**
+- 若「卡顿 / reset」显著减少 ⇒ **直接锁定 gcInterval 为触发源之一**
+
+**⑦ 副产品：3 个 UI 字符串 key 是死资源**
+
+| key | 状态 |
+|---|---|
+| `eac_gc_refresh_count_refresh_key` | Java 中**零引用**（仅 `strings.xml` / `R.java`）|
+| `eac_touch_count_refresh_key` | 同上 |
+| `eac_key_count_refresh_key` | 同上 |
+| `eac_idle_time_refresh_key` | 同上 |
+
+⇒ **UI 上只有一个 gcInterval 入口（type=6，0~50）**，不存在"触摸/按键分开计数"的用户可调项
+   （源码里 `handleInputEventImpl` 对 MOTION_UP 与 KEY_DOWN **共用同一个 `repaintCount`**）。
+
+**⑧ 状态恢复确认**
+
+本轮所有实验后均复原：`scope=DU(1)`、`cut_frame_num=0`、`debouncer` 关闭。
+抓取（`live_all.log` / `live_kernel.log`）仍在 `/data/local/tmp/` 运行，时间戳已核对。
+
+---
+
+#### 9.3.28 ★★★ 第四会话：波形标志位穷举 + 「快且带灰阶」的最终判定（2026-09-29）
+
+> 起因：用户要求「寻找 a2 / du 只叠加最低灰阶的最快波形」（基础波形无灰阶不好用）。
+> **结论：目标波形物理上不存在；「基础波形 + 标志位」在 scope 通道下全部收敛到两个极端。**
+
+**① scope 通道穷举（`update_to_display` + frame 增量双判据）**
+
+| scope 值 | 构成 | 实测 `waveform_mode` / `update` | frame 增量 | 判定 |
+|---|---|---|---|---|
+| `1` | 裸 DU | 1 / 0 局部 | 17~22 | DU（无灰阶）|
+| `2` | GC16 | 255 / 0 | +32 | GC16（38帧，16级灰）|
+| `4` | 裸 A2 | **4 / 0** | — | A2 |
+| `2308` | A2\|DITHER\|Y1 | **4 / 0**（10/10 稳定）| **+38** | ⚠️ 报 mode=4，**实跑 GC16** |
+| **`2312`** | DU4\|DITHER\|Y1 | **8 / 0 局部** ★ | **+23** | ★ **真的 DU4！** |
+| `264` | DU4\|DITHER | 255 | — | 回落 GC16 |
+| `2052`/`36`/`100`/`524292` | A2 + 其它位 | 255 | — | 回落 |
+| `257`/`2049` | DU\|DITHER 或 Y1 | → `[2]` GC16 | — | **dither 位 = 换波形，不省帧** |
+
+⇒ **★ 推翻 §9.3.14「scope 通道拿不到 DU4」** —— `scope=2312` 实测落 **`waveform_mode=8`（DU4）**，
+   `update_mode=0` 局部、`frame` 增 +23（≈DU4 的 24 帧），两次独立测试复现（52 / 51 条）。
+   **关键条件：必须 `DITHER(256) + Y1(2048)` 两位齐备**（只给 `264` 会回落）。
+
+**② 但 DU4 在故障机会卡死（同窗口交替对照，各测两次）**
+
+| 配置 | 帧数 | 灰阶 | reset 增量 |
+|---|---|---|---|
+| **DU4 (2312)** | 24 | 4 级 | **+15 / +14** ❌ |
+| DU (1) | 22 | 无 | **0 / 0** ✅ |
+
+reset 时卡住的 LUT 确证是 DU4：`dump_lut_list(): waveform[7] update[0] frame_total[24]`。
+
+⇒ ⇒ **DU4 = 「死亡谷」**：帧数（24）与 DU（22）几乎相同，但它的 state 覆盖（84/256）
+   远大于 DU（42/256），**波形长度不足以驱动** ⇒ 卡住。
+
+**③ `cut_frame_num` 对 slot-7 无效（裁剪路断）**
+
+| 基底 | cut=0 | cut=8 | cut=16 |
+|---|---|---|---|
+| DU（slot-1）| 22 | **14** ✅ | **6** ✅ |
+| **DU4（slot-7）** | 20 | 40 | 6 ❌ 无规律 |
+
+⇒ 与 §12.11 一致：**`cut_frame_num` 只对 slot-1 有效**，slot-7 豁免 ⇒ **无法把 DU4 裁短**。
+
+**④ SF 图像层 dither（`enableDither`）无效果**
+
+**干净对照**（不翻页，仅切开关，各连拍 2 张）：
+
+| 状态 | PNG 字节数 |
+|---|---|
+| dither OFF ×2 | **224197 / 224197** |
+| dither ON ×2（`enableDither(true)`）| **224197 / 224197** |
+
+⇒ **四张截图字节完全一致** ⇒ `enableDither` 对静态页面**无可观测效果**。
+   （`setDitherThreshold(128)` / `applyMonoLevel` 同样未见效果）
+
+> ⚠️ **方法学纠错**：本轮初次对比误用「翻页后截图」（内容与设置同时变），
+> 得到「dither 使 PNG 大 2.4 倍」的**错误结论**，已用干净对照推翻。见 ⑦。
+
+**⑤ `applyGCOnce()` = 全屏 GC16（官方「按需清残影」的真相）**
+
+官方范式（源码）：
+```java
+// OnyxLinearSnapHelper.java:39-40 —— 列表滚动停止（debounce）后
+if (滚动停止) { applyFastMode(false); EpdController.applyGCOnce(); }
+```
+
+实测（scope=A2 与 scope=DU 各一组）：
+
+| 组 | 平时翻页 | `applyGCOnce()` 插入的 | reset |
+|---|---|---|---|
+| `scope=A2(4)` | 47× `mode=4` | **1× `mode=2, upd=1`（全屏 GC16）** | **+8** ❌ |
+| `scope=DU(1)` | 34× `mode=1` | **1× `mode=2, upd=1`** | **+8** ❌ |
+
+⇒ **`applyGCOnce()` 插的是全屏 GC16**，与磁贴（§9.3.26）、gcInterval（§9.3.27）**同一条路**。
+
+**⑥ 最终判定：「快 + 有灰阶」在 Poke6 上不存在**
+
+| 波形 | 帧数 | 灰阶 | 同色态驱动 | 清残影 | 故障机 reset |
+|---|---|---|---|---|---|
+| A2 | 5 | 3 | 0.009 | ❌ | ✅ 0 |
+| **DU** | **22** | **无** | 0.023 | ❌ | ✅ **0** |
+| DU4 | 24 | 4 | 0.062 | ⚠️ 弱 | ❌ **+14** |
+| GC16 | 38 | 16 | 0.229 | ✅ 唯一 | ✅ 0 |
+
+⇒ **规律：5 / 22 / 38 帧都安全，偏偏 24 帧的 DU4 落在死亡谷。**
+⇒ **「清残影」的物理定义 = 全屏全摆动（`update[1]`）** ⇒ 任何清残影路径都必然 reset。
+⇒ 可用的只有两个极端：**DU（快、无灰阶）** 与 **GC16（16 级灰、唯一清残影）**。
+
+**⑦ 新增工具：`VU`（通用反射调用器）**
+
+`_scratch_gs/probe_6/session4/`，源码 `io.onyx.VU`，可调 `ViewUpdateHelper` 任意静态方法：
+
+```bash
+CLASSPATH=/data/local/tmp/vu.dex app_process /system/bin io.onyx.VU list          # 列出全部 API
+CLASSPATH=/data/local/tmp/vu.dex app_process /system/bin io.onyx.VU applyGCOnce
+CLASSPATH=/data/local/tmp/vu.dex app_process /system/bin io.onyx.VU useGCForNewSurface true
+CLASSPATH=/data/local/tmp/vu.dex app_process /system/bin io.onyx.VU setGcRefreshInterval 30
+```
+
+**⑧ 本轮新增的 `ViewUpdateHelper` API 清单（源码级）**
+
+| API | 语义 | 故障机 |
+|---|---|---|
+| `applyGCOnce()` | 插一次 GC（实测=全屏 GC16）| ❌ reset +8 |
+| `useGCForNewSurface(boolean)` | 新 surface 用 GC | 未测 |
+| `setGcRefreshInterval(int seconds)` | GC 周期（**秒级**，与 gcInterval 计数是**两个机制**）| 未测 |
+| `enableDither(boolean)` | SF 图像层抖动 | 实测无可观测效果 |
+| `setDitherThreshold(int)` / `applyMonoLevel(int)` / `setGrayscaleMode(int)` | 抖动/单色/灰阶 | Poke6 非 CFA 设备，多不适用 |
 
 ### 8.1 方法
 - 工具：`_scratch_gs/relay_uc552930.py`（unicorn2 ARM64 模拟）+ `relay_uc_matrix.py`
