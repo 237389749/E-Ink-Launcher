@@ -2558,6 +2558,16 @@ reset 周期 ~1.2s       （wait 1s + reset 0.1s + powerup 快失败）
 > │    `byPassAnimation()` 是**冻结刷新**（非跳过）；动画帧由 app 渲染，           │
 > │    eink 只能改"如何显示"、不能阻止"产生"（§9.3.29⑦）                        │
 > │                                                                          │
+> │ ★ **§9.3.29⑧⑨（★ 对故障机最有价值）**：                                   │
+> │  · **86% 的 reset 来自【全屏 update[1]】**（130 次中 112 次）              │
+> │    —— 其中 **83 次是 A2 全屏**（`waveform[6] update[1] total[5]`）          │
+> │  · ★ 这些全屏**不经 scope 通道**（同期 logcat `waveform_mode` 只有 1/DU）    │
+> │    ⇒ **解释了 §9.3.25「三维度无效」**：主因根本不在 scope 通道               │
+> │  · 来源 = **`scrollingRefreshMode=2(A2)` 的滚动特判**；但**API 改不动**      │
+> │    （读回仍 2）⇒ **只能在 UI 层改**                                        │
+> │  · **`byPass(count)` 是【设置】语义非累加**，阈值 **>=10** 才冻结；          │
+> │    `byPass(0)` 释放 —— **launcher 现有用法正确，无需修改**（曾误判为隐患）    │
+> │                                                                          │
 > │ 已被推翻的中间论断（详见各节"更正"）：                                    │
 > │  · "改重排队波形号/坐标可根治循环" → 作废（§9.3.18④/§9.3.19⑦）          │
 > │  · "A2 是 reset 的产物" → 循环论证错误（§9.3.18⑤）                       │
@@ -5747,13 +5757,86 @@ eink 侧 API 只能改变这些帧【如何被显示】（合并 / 延迟 / 冻�
 ⇒ 「无动画」只能在 app 侧实现（如 Legado 自带"无动画翻页"设置）
 ```
 
-**⑤ 副产品（★ 值得记录的隐患）：`byPass` 的引用计数语义**
+**⑤ ⚠️ 已作废（同日实测推翻）：我曾称 `byPass(0)` 是"硬清零隐患" —— 错的**
 
-- `byPassAnimation` / `resetAnimationBypass` 成对用 **±20**（而非 ±1）⇒ 设计为**粗粒度配对**
-- 实测：计数 20 → （-20）→ 0 **即恢复**；再 -20 变负也不报错
-- ⚠️ **launcher 的 `RefreshModeHelper.doApplyWithBypass()` 用 `byPass(10)` / `byPass(0)`** ——
-  其中的 **`byPass(0)` 是硬清零，不符合引用计数语义** ⇒ 若别处也持有 bypass 计数，
-  launcher 会**无视他人持有强行恢复**。**潜在隐患，建议改为配对调用（`byPass(0+10)` → `byPass(-10)`）**。
+> **【本条原论断作废，见 ⑨】** 原文称「`byPass(0)` 是硬清零，不符合引用计数语义 ⇒ 若别处也持有，
+> launcher 会无视他人持有强行恢复，是潜在隐患」。**实测证明该论断有误**，正确事实见 ⑨。
+> 教训：**不得仅凭源码静态阅读就下"隐患"结论**。
+
+**⑥ 提取方法** … 见上文 ⑥（MMKV 解析）
+
+**⑦ 「能不能全部无动画」—— 实测结论：eink 侧做不到**（详见上文 ⑦）
+
+**⑧ ★★★ 「82% 的 reset 来自 A2 全屏」—— 本轮对故障机最有价值的发现**
+
+对 uptime 12034s 窗口内 **130 次 reset** 的「卡住波形」统计：
+
+```
+83× waveform[6] update[1] total[5]    ← A2 全屏，占 64%
+16× waveform[1] update[1] total[22]   ← DU 全屏
+ 8× waveform[2] update[1] total[38]   ← GC16 全屏
+ 4× waveform[6] update[1] total[10]
+ 1× waveform[1] update[1] total[14]
+ ────────────────────────────────────────────
+ 19× waveform[7] update[0] total[24]   ← DU4 局部
+  4× waveform[1] update[0] total[22]
+  3× waveform[2] update[0] total[38]
+ ────────────────────────────────────────────
+ ⇒ 112/130（86%）是【全屏 update[1]】触发的
+```
+
+**关键：这些全屏更新【不经 scope 通道】。**
+- 同期 `logcat -t 300 | grep update_to_display`：**`waveform_mode` 只有 1（DU）**，`update_mode=1` **为 0**
+- ⇒ 说明它们来自 **native / EAC 滚动特判**，用户态看不到
+
+**⇒ 这解释了 §9.3.25「scope / EAC / A2 三维度实测全部无效」的深层原因**：
+   reset 的主因（A2 全屏）**根本不在 scope 通道**，改 scope 自然无效。
+
+**来源锁定：`scrollingRefreshMode = 2（A2）`**（`EInkHelper.getScrollingRefreshMode()` 实测 = 2）
+- 对应 `scroll` 期间的 `applyTransientUpdate(toEpdMode(2))`（`ScrollHelper.java:137`）
+- ⚠️ **但 API 改不动**：`setScrollingRefreshMode(0)` 调用成功、**读回仍 2**（复现 §9.3.14③ 旧记录）
+  ⇒ 只能**在 UI 层改**（若存在该选项）
+
+**⑨ ★★★ `byPass(count)` 的真实语义 —— 设置而非累加；阈值 10（实测，纠正 ⑤）**
+
+**① owner 机制（`ViewUpdateHelper.java:1032-1040, 1054-1060）**
+```java
+byPass(int count)              → byPass("", count)      // launcher 走这条，owner = ""
+byPass(String owner, int count):
+    if (checkAndSetByPassOwner(owner, count)) byPassImpl(count);
+    else Log.i(TAG, "by pass is currently owned by ... request filtered");
+
+checkAndSetByPassOwner:
+    accepted = isEmpty(currentOwner) || currentOwner.equals(requestOwner);
+    if (accepted) byPassOwner.set(count <= 0 ? "" : requestOwner);   // count<=0 释放 owner
+```
+
+**② 语义与阈值（受控扫描，判据 = frame 增量是否归零）**
+
+| 调用 | frame 增量 | 结论 |
+|---|---|---|
+| `byPass(1)` / `byPass(5)` / `byPass(6)` | +22~66 | **不冻结**（<阈值）|
+| **`byPass(10)` / 12 / 15 / 19 / 20 / 21 / 50 / 100** | **0** | ✅ **冻结** |
+| **`byPass(6)` × 2（=12）** | 22 | ❌ **不冻结 ⇒ 不累加** |
+| **`byPass(4)` × 3（=12）** | 29 | ❌ 不累加 |
+| `byPass(10)` → `byPass(-10)` | 0 → **+44** | ✅ **恢复**（负数可配对释放）|
+| `byPass(20)` → `byPass(-20)` | 0 → **+44** | ✅ 同上 |
+
+⇒ **`byPass(count)` 是【设置】语义（绝对值比较），不是引用计数累加**；
+   阈值 **`count >= 10`** 才冻结；`count <= 0` 释放。
+
+**③ 对 launcher 现有代码的判定：✅ 正确，无需修改**
+
+| 检查项 | 实测结果 |
+|---|---|
+| `byPass(10)` 能否冻结？ | ✅ **恰好达到阈值 10** |
+| `byPass(0)` 能否释放？ | ✅ 能（`count<=0`）|
+| owner 机制会拦截吗？ | ❌ 不会 —— launcher 全程空 owner，`currentOwner` 亦为空 ⇒ `accepted=true` |
+| 「无视他人持有强行恢复」？ | ❌ **不可能** —— 若他人持有非空 owner，launcher 的空 owner 调用**会被 filter** |
+
+**④ 唯一可选的改进（低价值）**：`byPass(10)` 恰好踩在阈值上（1~9 无效），
+   若未来阈值定义变化则失效。可改为 `byPass(20)`（与 `byPassAnimation()` 一致）以求稳健。
+   **非必需**。
 
 ### 8.1 方法
 - 工具：`_scratch_gs/relay_uc552930.py`（unicorn2 ARM64 模拟）+ `relay_uc_matrix.py`

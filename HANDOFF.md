@@ -22,7 +22,9 @@
 **§6.1~§6.5 已执行完毕**：双刷机制 A 被**证伪**（因果方向反了）、§6 的 17 个 dt 属性**全部不存在**、
 **全屏 GC16 与 A2 走同一条 reset 路径**（⇒ 整屏清残影与避免 reset 物理不可兼得）。
 **§9.3.25（第三会话）**：「重叠」在 **scope / EAC / A2 三维度实测全部无效**；**「降低操作频率」同日也被否证** ——
-根因是**供电成功率（硬件随机）**，积压与操作节奏**无关** ⇒ **软件层没有稳定解法**，只能修硬件。
+**§9.3.29⑧（第五会话）找到原因**：**86% 的 reset 来自全屏 `update[1]`（130 次中 112 次，83 次是 A2 全屏）**，
+**不经 scope 通道**；来源 = **`scrollingRefreshMode=2` 滚动特判**（API 改不动，只能走 UI）。
+**详见 §12 交接章节。**
 **仅剩 1 个未解项**：重启的真正触发源（`bootreason=reboot`，已排除崩溃/watchdog，需常驻 events log）。
 
 ---
@@ -491,6 +493,14 @@ adb shell su -c "grep -m1 TerribleFailure /data/system/dropbox/system_server_wtf
 | "根因是切档批量写 EAC"（§12.7 旧结论）| ❌ 爆发窗口 launcher 无操作 | ref §9.3.23④ |
 | "REGAL = 5 帧" | ❌ 实为 **GC16 38 帧**（mode4 列被填成 GC16 副本）| ref §9.3.11 |
 | "冲击残影可修好" | ❌ `panel_clean` 等节点只读，非命令节点 | ref §9.3.23⑨ |
+| "双刷 = powerup 重试周期"（机制 A）| ❌ 因果方向反了（`Reg Enable` 在 frame 推进**之后**）| ref §9.3.24① |
+| "§6 的 17 个 dt 属性可调" | ❌ **全部不存在**（仅 `epdc-waveform-load-delay`）| ref §9.3.24② |
+| "FULL 位在 scope 通道不生效" | ⚠️ 仅 scope 通道成立；**带参 `repaintEverything(值)` 的 FULL 生效** | ref §9.3.24④ |
+| "降低操作频率可缓解"（第三会话）| ❌ 间隔扫描：**无系统性差异**（0.35s 反而最好）| ref §9.3.25⑫ |
+| "scope 通道拿不到 DU4" | ❌ `scope=2312` **确实落 DU4**（但 reset +14，死亡谷）| ref §9.3.28① |
+| "A2 必走全屏 `update[1]`" | ❌ `scope=2308` 实测 `update_mode=0` 局部 | ref §9.3.28① |
+| "清残影必然 = 全屏 GC16" | ❌ 应为「全屏 + **全摆动类**」（`108`/DEEP_GC16 亦可）| ref §9.3.28⑨ |
+| **"launcher `byPass(0)` 是硬清零隐患"**（本会话初判）| ❌ **实测：`byPass` 是【设置】语义非累加，launcher 用法正确** | ref §9.3.29⑨ |
 
 ---
 
@@ -543,7 +553,10 @@ cd C:\Users\root\Documents\eink
 | 16 | FULL(32) 能与哪些波形组合 | ✅ **已定论**：只被**全摆动类**接受 —— `98`(GC16) / `108`(DEEP_GC16) 能全屏；`33/97/99/100/104`（DU/GC4/A2/DU4 + FULL）**返回 OK 但零全屏**（两次复现）。差分模式 state 覆盖不足 ⇒ 物理无法整屏（§9.3.28⑨）|
 | 17 | EAC「刷新」页各项是否影响卡顿 | ✅ **对照表已建**（§9.3.29②）：7 项含 `gcInterval`(20) / `gcAfterScrolling`(true) / `useGCForNewSurface`(false) 等。**权威源 = `/onyxconfig/mmkv/onyx_config`** |
 | 18 | 「页面拖动停止后全刷」是否清残影 | ✅ **实测：A2 模式下不清**（只调 `clearTransientUpdate`，零 reset）。⚠️ 但**需拖动式交互**（网页/翻页=滑动）才触发，`input swipe` 测不到（§9.3.29③）|
-| 19 | 「把动画都过滤」能否全部无动画 | ✅ **已定论：eink 侧做不到**。`animationDuration`=debouncer 下限、`byPassAnimation()`=**冻结刷新**（非跳过）；动画帧由 app 渲染，eink 只能改"如何显示"。另发现 **launcher `byPass(0)` 硬清零不符引用计数语义**（隐患，§9.3.29⑦）|
+| 19 | 「把动画都过滤」能否全部无动画 | ✅ **已定论：eink 侧做不到**。`animationDuration`=debouncer 下限、`byPassAnimation()`=**冻结刷新**（非跳过）；动画帧由 app 渲染，eink 只能改"如何显示"（§9.3.29⑦）|
+| 20 | ★ **reset 的主因是什么**（第五会话最大发现）| ✅ **86% 的 reset 来自全屏 `update[1]`**（130 次中 112 次），其中 **83 次是 A2 全屏**（`waveform[6] update[1] total[5]`）；**不经 scope 通道** ⇒ 解释了 §9.3.25「三维度无效」。来源 = **`scrollingRefreshMode=2` 滚动特判**（§9.3.29⑧）|
+| 21 | 能否关掉 A2 滚动特判 | ⚠️ **API 改不动**（`setScrollingRefreshMode(0)` 读回仍 2，复现 §9.3.14③）⇒ **只能在 UI 层试**。★ **下一个会话优先验证此项** |
+| 22 | `byPass` 语义（我曾误判为隐患）| ✅ **已纠正**：`byPass(count)` 是**【设置】语义非累加**，阈值 **>=10** 冻结；launcher `byPass(10)`/`byPass(0)` **正确，无需修改**（§9.3.29⑨）|
 
 > ★ **磁贴的实用结论**（§9.3.26⑤）：磁贴是**故障机上唯一能「整屏」清残影的用户入口**，
 > 但 `update[1]` 全屏 ⇒ 必然 `wait all_lut_free` ⇒ 实测 **5 次中 3 次 reset**。
@@ -555,5 +568,75 @@ cd C:\Users\root\Documents\eink
 
 ---
 
-*本文档由 2026-09-25 会话生成。所有数据均经独立复现或标注可信度。*
+## 12. ★★★ 第五会话交接（2026-09-29，最新）
+
+> **一句话**：找到了 reset 的主因 —— **86% 来自全屏 `update[1]`，其中 83 次是 A2 全屏**，
+> 来源是 **`scrollingRefreshMode=2` 的滚动特判**，且**不经 scope 通道**（解释了为何改 scope 无效）。
+
+### 12.1 本轮最大发现（优先验证这项）
+
+| # | 发现 | 证据 | 下一步 |
+|---|---|---|---|
+| **1** | **86% reset 来自全屏 `update[1]`**（130 次中 112 次）| reset 时卡住的波形统计 | — |
+| **2** | **其中 83 次是 A2 全屏**（`waveform[6] update[1] total[5]`）| 同上 | — |
+| **3** | ★ **这些全屏不经 scope 通道** | 同期 `logcat` 的 `waveform_mode` **只有 1(DU)**、`update_mode=1` 为 0 | — |
+| **4** | 来源 = **`scrollingRefreshMode=2`** | `EInkHelper.getScrollingRefreshMode()` = 2 | ★ **验证项** |
+| **5** | **API 改不动它**：`setScrollingRefreshMode(0)` 读回仍 2 | 实测（复现 §9.3.14③）| ★ **只能走 UI** |
+
+**★ 建议下一个会话优先做**：在**设备 UI** 里找「滚动刷新模式」类选项，改成非 A2，
+然后抓 `waveform[6] update[1]` 计数是否下降。**这是目前唯一有明确指向、且可控的软件因素。**
+
+```bash
+# 判据命令（改前/改后对比）
+adb shell su -c "dmesg | grep -c 'waveform\[6\] update\[1\]'"
+adb shell su -c "dmesg | grep -c 'reset cause'"
+```
+
+### 12.2 已澄清/纠正的（避免重复劳动）
+
+| 项 | 结论 |
+|---|---|
+| **`byPass(count)` 语义** | ✅ **【设置】语义非累加**；阈值 **>=10** 才冻结；`count<=0` 释放。**launcher `byPass(10)`/`byPass(0)` 正确，无需改** |
+| ⚠️ 我曾误判 | ❌ "`byPass(0)` 硬清零是隐患" —— **实测推翻**，已在 §9.3.29⑤ 标注作废 |
+| **「无动画」** | ✅ **eink 侧做不到**：`animationDuration`=debouncer 下限、`byPassAnimation()`=冻结（非跳过）；动画帧由 app 渲染 |
+| **EAC「刷新」页 7 项** | ✅ 完整对照表已建（§9.3.29②），权威源 = `/onyxconfig/mmkv/onyx_config` |
+| **「页面拖动停止后全刷」** | ⚠️ **A2 模式下名不副实**（只调 `clearTransientUpdate`，不清残影）；需**拖动式交互**才触发 |
+
+### 12.3 新增设备端工具（`_scratch_gs/probe_6/session5/`）
+
+| 工具 | 用途 |
+|---|---|
+| `vu.dex`（`io.onyx.VU`）| **通用反射调用器**：可调 `ViewUpdateHelper` 任意静态方法。`VU list` 列全部 API |
+| `eh.dex`（`io.onyx.EH`）| 调 **`EInkHelper`**（服务层）：`EH getGcInterval` / `EH setAnimationDuration 200` |
+| `gc.dex`（`io.onyx.GC`）| 一次性 dump 多个运行时值（gcInterval/animationDuration/antiFlicker/scrollingRefreshMode…）|
+
+```bash
+CLASSPATH=/data/local/tmp/vu.dex app_process /system/bin io.onyx.VU list
+CLASSPATH=/data/local/tmp/vu.dex app_process /system/bin io.onyx.VU applyGCOnce
+CLASSPATH=/data/local/tmp/eh.dex app_process /system/bin io.onyx.EH getScrollingRefreshMode
+CLASSPATH=/data/local/tmp/gc.dex app_process /system/bin io.onyx.GC
+```
+
+### 12.4 本轮踩过的坑（务必避免）
+
+| 坑 | 教训 |
+|---|---|
+| ★★ **`VAR="CLASSPATH=… app_process …"; $VAR`** | **第 4 次踩**！变量包裹整条命令必然失败 → **脚本里每处都写完整命令** |
+| ★★ **读抓取文件前不核对时间戳** | 曾把 09-28 的旧日志当"刚才的重启证据"分析 → **先比 `ls -la` mtime 与设备 `date`** |
+| ★★ **A/B 对照未控制变量** | dither 对比用「翻页后截图」→ 得出错误结论 → **同页面只改待测变量** |
+| **仅凭源码静态阅读下"隐患"结论** | `byPass(0)` 误判即此因 → **先实测再断言** |
+| **`app_process` 每次都是新进程** | static 状态（如 `byPassOwner`）**无法跨调用测试** |
+
+### 12.5 设备当前状态（离开时）
+
+```
+scope = DU(1)          cut_frame_num = 0        update_disable = 0
+scrollingRefreshMode = 2 (A2)     ← 未改动（API 改不动）
+gcInterval = 20        animationDuration = 20   antiFlicker = 10
+抓取: /data/local/tmp/live_all.log 与 live_kernel.log（★ 用前核对 mtime）
+```
+
+---
+
+*本文档由 2026-09-25 会话生成；§12 由 2026-09-29 第五会话追加。*
 *ref.md 的 §9.3 开头有导读框，列出最优结论与已作废判据 —— 建议从那里进入详细内容。*
