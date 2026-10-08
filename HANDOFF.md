@@ -102,12 +102,24 @@ git push origin v0.x        # 代理可用时（当前 127.0.0.1:7890 在运行�
 # 若代理挂掉、直连可用时：git -c http.proxy= -c https.proxy= push origin v0.x
 ```
 
-- ⚠️ `origin` URL 里**硬编码了 GitHub token**（`ghp_WgZ...`）。它只在 `.git/config`（不提交）。
-  **建议改用凭据管理器**：`git remote set-url origin https://github.com/237389749/E-Ink-Launcher.git`
+- ✅ **`origin` URL 已是干净的**（2026-10-08 复核：`https://github.com/237389749/E-Ink-Launcher.git`，**无内嵌 token**）。
+  鉴权走 `credential.helper = manager`（GCM）。工作区根那个 `ghp_….txt` 是 **0 字节空文件**，不用管。
 - 网络状态会变：曾出现"直连通、代理不通"，也出现"代理通、直连不通"。**先测再推**：
   ```powershell
   Test-NetConnection github.com -Port 443 -InformationLevel Quiet
   Test-NetConnection 127.0.0.1 -Port 7890 -InformationLevel Quiet
+  ```
+- ★★ **2026-10-08 实测：报 `schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS`
+  时，先怀疑【运行环境】而不是凭据**。当时代理 7890 已断、直连 TCP 通，但
+  `git push` 与 Git 自带 `curl` 都在 **TLS 握手阶段**就失败、**GCM 根本不弹窗**
+  （因为根本没走到 401 认证挑战）。把执行环境的文件沙箱放宽到 full-access 后，**同一条命令直接成功**
+  ⇒ 这是**沙箱拿不到用户的加密凭据库**，不是 token/账号问题。
+  **不要把这种现象误判成"没配凭据"去反复折腾 `credential.helper`。**
+  判断顺序：① `Test-NetConnection` 看 TCP；② 报错在 TLS 层还是 401；
+  ③ 若在 TLS 层且 curl 同样报错 ⇒ 是环境/沙箱，换环境即可。
+- 推送成功后独立核验（不依赖 `git status` 的缓存）：
+  ```powershell
+  git -c http.proxy= -c https.proxy= ls-remote origin refs/heads/v0.x   # 应与 git rev-parse HEAD 相同
   ```
 
 ---
