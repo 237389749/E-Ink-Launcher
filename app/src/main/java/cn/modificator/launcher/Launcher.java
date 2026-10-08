@@ -476,7 +476,9 @@ public class Launcher extends Activity
         .show();
   }
 
-  /** 长按菜单：为该应用配置系统 per-app 刷新模式（写入系统 EACAppTheme，与通知栏 EInk Center 同源） */
+  /** 长按菜单：为该应用配置 per-app 刷新模式（scope 通道，按包名单独设置）。
+   *  ⚠️ 菜单项直接用 {@link RefreshModeHelper#LABELS}，故其中的「None / NORMAL」两项
+   *  对 per-app **无对应语义**（清 scope 不适用），点选会返回失败 —— 属既有行为，未改动。 */
   private void showPerAppRefreshModeDialog(final String packageName) {
     new AlertDialog.Builder(this)
         .setTitle(getString(R.string.dialog_refresh_mode) + " — " + packageName)
@@ -494,7 +496,8 @@ public class Launcher extends Activity
 
   /** per-app 刷新模式：经 scope 通道对该包名单独设置。
    *  scope 接受任意 UI/EPD 值，不受 EAC 逻辑域 toEpdMode 归一化限制，
-   *  故可表达 DU(1)/GC16(2)/A2(4)/DU4(2312) 全部 4 个基础波形（ref.md §9.3.15）。 */
+   *  故可表达 DU(1)/GC16(2)/A2(4) 各基础波形（ref.md §9.3.15）。
+   *  （DU4(2312) 已于 2026-10-08 从档位表移除，见 {@link RefreshModeHelper} 类注释。） */
   private boolean applyPerAppRefreshMode(String pkg, int modeIndex) {
     return RefreshModeHelper.applyPerApp(pkg, modeIndex);
   }

@@ -19,20 +19,28 @@ import java.util.Locale;
 /**
  * 墨水屏刷新模式切换 —— 仅 scope 通道（EAC 定死，不随档位写入）。
  *
- * 模式集（6 档 = **4 个基础波形** + None/NORMAL，采用 **scope UI/EPD 值域**，见 {@link #SCOPE_VALUES}）：
- *   None / NORMAL（清 scope）+ DU(1) / GC16(2) / A2(4) / DU4(2312)
+ * 模式集（**5 档** = 3 个基础波形 + None/NORMAL，采用 **scope UI/EPD 值域**，见 {@link #SCOPE_VALUES}）：
+ *   None / NORMAL（清 scope）+ DU(1) / GC16(2) / A2(4)
  *
- * **档位依据**（ref.md §9.3.15/§9.3.16 实测确证）：Poke6 波形库**只有 4 种独立波形**
- * （DU / GC16 / A2 / DU4），全屏与局部通道都不会更多 ⇒ 档位即这 4 个。
- * ⚠️ 其中 **A2 / DU4 触发 `update[1]` 全屏刷新，故障机会 reset（实测 12 / 8 次每轮）**；
- *    DU / GC16 走 `update[0]` 局部，故障机稳定。A2/DU4 是为**正常机**保留的选项。
- *    （旧说明"已去除全屏族"已作废 —— 改为全 4 档并存、由用户按设备状况自选。）
+ * **档位依据**（ref.md §9.3.15/§9.3.16 实测确证）：Poke6 波形库硬件上共 **4 种独立波形**
+ * （DU / GC16 / A2 / DU4），全屏与局部通道都不会更多。
+ * ⚠️ **DU4(2312) 已从选项移除**（用户决定）：2bpp 4 级灰 / 24 帧，视觉实测"极淡、只剩特征"
+ * （ref.md §9.8），灰阶不如 GC16、速度不如 DU ⇒ 无实用价值。内核仍支持，需要时把 2312
+ * 加回 {@link #SCOPE_VALUES}/MODE_NAMES/LABELS 的**末尾**即可（顺序即持久化 index）。
+ *
+ * ⚠️ **A2(4) 只在【未刷 v7 内核】的故障机上会 reset**（实测 10 次/5 轮）。
+ *    该现象已在故障机内核上定位并修复，分两层（详见 HANDOFF §13 / §13.10）：
+ *      · 第 1 层：tps6518x powerup 判据恒假 `reg 0x0F == 0xFA`（实读 0xBA）→ 反复拉低电源轨；
+ *      · 第 2 层：`wait all_lut_free` 超时被 v3/v5 压到 500 ms，小于全屏 GC16 的 ~426 ms。
+ *    ⇒ 刷 **v7H / v7G** 后 **A2(4) 实测 0 reset**（含原 DU4/108 在内六档全零）；
+ *      未刷则沿用旧建议：故障机选 DU / GC16，A2 只用于正常机。
+ *    现场判据：dmesg 里有无 `reset cause` / `wait all_lut_free timeout`。
  *
  * 通道设计（ref.md §9.3.6 源码级定论）：
  * 1. scope（ViewUpdateHelper.applyAppScopeUpdate，null 包名 = 全局）是改变第三方 app 真实
  *    合成翻页波形的【唯一】有效主通道，且**接受任意 UI/EPD 值**（不经 EACUtils.toEpdMode）。
  * 2. EAC 通道的 updateMode 字段被 toEpdMode 硬归一化（非 0-5 → 5），承载不了
- *    DU4(2312) 等实测值；且切档批量写 12 个 app 会引发窗口重建风暴 → system_server WTF
+ *    2312 这类实测值；且切档批量写 12 个 app 会引发窗口重建风暴 → system_server WTF
  *    刷屏 → Watchdog 60s 重启（ref.md §12.7 实测撞上）。
  *    ⇒ **EAC 不随档位变**，由 {@link #applyFixedEac()} 一次性定死为 REGAL(3)
  *    （启用周期 GC + 滚动瞬态；其子路径模式恒为 toEpdMode(0)=AUTO=GC16 局部，实测安全）。
@@ -45,31 +53,33 @@ public class RefreshModeHelper {
   /**
    * 档位 → scope 通道 UI/EPD 值（-1 = 清 scope，交系统默认）。
    *
-   * 档位 = Poke6 波形库里 **4 个基础波形**（ref.md §9.3.15/§9.3.16 实测确证
-   * "只有这 4 种独立波形"，全屏/局部通道都不会变出更多）：
+   * 档位 = Poke6 波形库里的基础波形（ref.md §9.3.15/§9.3.16 实测确证硬件共 4 种独立波形）：
    *   1    = DU   ：1bpp 纯黑白，22 帧，**多次脉冲**，不闪
    *   2    = GC16 ：4bpp 16 级灰，38 帧，**全摆动**（闪烁），覆盖 243/256
    *   4    = A2   ：5 帧，**单次脉冲**（最快），覆盖仅 18/256，残影最大
-   *   2312 = DU4  ：2bpp 4 级灰，24 帧，覆盖 84/256
    * 另加 None（还原各 app 原配置）/ NORMAL（清 scope，交系统默认）两个非波形档。
    *
-   * ⚠️ **波动类型与故障机适配**（ref.md §9.3.5 实测）：
-   *   DU / GC16 走 `update[0]` **局部刷新** → 故障机 reset 0，稳定；
-   *   A2(4) / DU4(2312) 触发 `update[1]` **全屏刷新** → **故障机必然 wait all_lut_free 超时
-   *   → reset → 卡顿**（实测 reset 12 / 8 次每轮）。
-   *   ⇒ A2 / DU4 为**正常机**准备（本 launcher 不止用于故障机）；故障机用户请选 DU / GC16。
-   *   ⇒ 保留 4 档而非只留 2 档，是为"给予选择的权力"，由用户按设备状况自选。
+   * ⚠️ **DU4(2312) 已从选项移除**（用户决定）：它是 2bpp 4 级灰、24 帧，视觉实测
+   * "极淡、只剩特征"（ref.md §9.8），灰阶不如 GC16、速度不如 DU ⇒ 无实用价值。
+   * 内核仍支持该波形，需要时可把 2312 加回本数组末尾（**只能加在末尾**，见下）。
+   * ⚠️ **本数组/`MODE_NAMES`/`LABELS` 的顺序即 `Config.KEY_REFRESH_MODE` 的持久化 index**，
+   * 增删只能动**末尾**，否则会打乱已保存的档位。本次删的正是末尾项，0~4 语义不变。
+   *
+   * ⚠️ **波动类型与 reset 的关系**（ref.md §9.3.5 / HANDOFF §13.10）：
+   *   DU / GC16 走 `update[0]` **局部刷新**，任何内核下都稳定；
+   *   A2(4) 会走 `update[1]` **全屏刷新**路径 —— 在**未修内核的故障机**上必然
+   *   `wait all_lut_free` 超时 → reset → 卡顿（实测 A2 10 次/5 轮）。
+   *   ⇒ **已刷 v7H/v7G 的故障机：A2 也可用（实测 0 reset）；未刷：故障机请选 DU / GC16。**
    */
-  private static final int[] SCOPE_VALUES = {-1, -1, 1, 2, 4, 2312};
+  private static final int[] SCOPE_VALUES = {-1, -1, 1, 2, 4};
 
-  /** 可选模式集（4 个基础波形 + None/NORMAL 两个非波形档） */
+  /** 可选模式集（3 个基础波形 + None/NORMAL 两个非波形档；DU4 已移除） */
   public static final String[] MODE_NAMES = {
       "None",
       "NORMAL",
       "DU",
       "GC16",
       "A2",
-      "DU4",
   };
 
   public static final String[] LABELS = {
@@ -78,7 +88,6 @@ public class RefreshModeHelper {
       "DU — 纯黑白·22帧·1bpp",
       "GC16 — 16级灰·38帧·4bpp",
       "A2 — 最快·5帧·无灰阶",
-      "DU4 — 4级灰·24帧·2bpp",
   };
 
   private static final String VIEW_UPDATE_HELPER = "android.onyx.ViewUpdateHelper";
@@ -319,14 +328,54 @@ public class RefreshModeHelper {
     }
   }
 
-  /** 「刷新屏幕」：等同通知栏刷新屏幕磁贴的一次整屏全刷（无参 repaintEverything，
-   *  按当前已生效的 scope 波形重画全部窗口）。失败只记日志，不把已生效的 scope 判为失败。 */
+  /** 切档后的收尾重画：**无参** `repaintEverything()` —— 按当前已生效的 scope 波形重画全部窗口。
+   *  ⚠️ 它**带不上 FULL(32) 位**，只清「变化区域」的残影；整屏清残影请用 {@link #clearGhosting()}
+   *  （ref.md §9.3.26④ 更正：磁贴走的是**带参**的 98 全屏 GC16，与此不等价）。
+   *  失败只记日志，不把已生效的 scope 判为失败。 */
   private static void fullRefreshScreen() {
     try {
       viewUpdateHelperClass.getMethod("repaintEverything").invoke(null);
       log("apply: refresh screen (post-apply) -> OK");
     } catch (Throwable t) {
       log("apply: refresh screen (post-apply) EXCEPTION " + t);
+    }
+  }
+
+  // =========================================================================
+  // 整屏清残影
+  // =========================================================================
+
+  /**
+   * 「整屏清残影」用的 UI/EPD 值：`GC16(2) | FULL(32) | WAIT(64)` = 98。
+   *
+   * 依据（ref.md §9.3.28⑨ / HANDOFF §13.9③，故障机实测）：
+   *  · FULL(32) 只被**全摆动类**波形接受（GC16 / DEEP_GC16）；DU/A2/DU4 差分模式被拒；
+   *  · 98 与通知栏「刷新屏幕」磁贴 / `applyGCOnce()` / gcInterval 全刷是**同一条路**；
+   *  · 内核修好（v7F/v7G/v7H）后故障机实测 **0 reset / 8 次**（修复前"5 次中 3 次 reset"）。
+   */
+  public static final int UI_GC16_FULL = 98;
+
+  /** 设置页「刷新模式」弹窗里追加的"清残影"项文字（不进入 {@link #LABELS}，故不影响 per-app 菜单） */
+  public static final String CLEAR_GHOSTING_LABEL = "清残影 — 整屏全刷（GC16·38帧）";
+
+  /**
+   * 整屏清残影：反射调 `ViewUpdateHelper.repaintEverything(98)`。
+   *
+   * 与通知栏磁贴「刷新屏幕」同通道（ref.md §9.3.26）。**故障机上也是安全的** ——
+   * 前提是内核已修（v7H/v7G/v7F）：实测 0 reset；未修内核的故障机上会触发 reset。
+   * ⚠️ 整屏全刷会**明显闪一下**（全摆动波形），属正常现象。
+   */
+  public static boolean clearGhosting() {
+    if (!init()) return false;
+    try {
+      viewUpdateHelperClass.getMethod("repaintEverything", int.class).invoke(null, UI_GC16_FULL);
+      log("clearGhosting: repaintEverything(" + UI_GC16_FULL + ") -> OK");
+      toast("已整屏清残影");
+      return true;
+    } catch (Throwable t) {
+      log("clearGhosting: EXCEPTION " + t + "\n" + stackTrace(t));
+      toast("清残影失败（见 refresh_mode.log）");
+      return false;
     }
   }
 

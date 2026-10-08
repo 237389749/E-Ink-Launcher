@@ -145,21 +145,31 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
         : "按键已启用（点击切换手势）");
   }
 
-  /** 全局刷新模式选择弹窗（模式集与系统引擎 4 模式互补） */
+  /** 全局刷新模式选择弹窗。
+   *  末尾追加一项「清残影」—— 它是**动作**而非档位，故不放进 {@link RefreshModeHelper#LABELS}
+   *  （那个数组同时被长按图标的 per-app 菜单使用，塞进去会出现无意义的 per-app「清残影」）。 */
   private void showRefreshModeDialog() {
     if (!RefreshModeHelper.isAvailable()) {
       Toast.makeText(getActivity(), "此设备不支持 EPD 模式切换", Toast.LENGTH_SHORT).show();
       return;
     }
+    final String[] modeLabels = RefreshModeHelper.LABELS;
+    final String[] items = new String[modeLabels.length + 1];
+    System.arraycopy(modeLabels, 0, items, 0, modeLabels.length);
+    items[modeLabels.length] = RefreshModeHelper.CLEAR_GHOSTING_LABEL;
     new AlertDialog.Builder(getActivity())
         .setTitle(R.string.setting_refresh_mode)
-        .setItems(RefreshModeHelper.LABELS, new DialogInterface.OnClickListener() {
+        .setItems(items, new DialogInterface.OnClickListener() {
           @Override
           public void onClick(DialogInterface dialog, int which) {
+            if (which == modeLabels.length) {
+              // 清残影：一次整屏全刷，**不改变**已保存的档位，也不离开设置页
+              RefreshModeHelper.clearGhosting();
+              return;
+            }
             if (RefreshModeHelper.applyWithEac(which)) {
               config.setRefreshMode(which);
-              Toast.makeText(getActivity(),
-                  "刷新模式已切换（EAC 兜底配置后台执行中…）", Toast.LENGTH_SHORT).show();
+              Toast.makeText(getActivity(), "刷新模式已切换", Toast.LENGTH_SHORT).show();
             }
             getActivity().onBackPressed();
           }
