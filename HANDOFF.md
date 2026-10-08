@@ -3,6 +3,13 @@
 > 生成时间：2026-09-25 · 面向下一个会话/接力的 LLM 或工程师
 > **先读本文，再按需查 `ref.md`（5684 行完整日志）与 `WAVEFORM_TO_DISPLAY.md`（15 KB 提炼版）**
 > **★ 2026-09-25 第二会话已执行 §6.1~§6.5 并推翻 3 条旧结论 —— 见 §4.6、§6、`ref.md` §9.3.24**
+>
+> **★★★ 2026-09-29 第六会话（最新）：主症状的根因已定位，并已用内核 patch 消除 —— 见 §13。**
+> **§0 / §4.1 / §4.6 / §12 中"供电偶发成功窗口"「提高重试频率」「86% reset 来自 scrollingRefreshMode」
+> 等论断已被实测推翻；务必先读 §13，再读其余章节。**
+>
+> **★★★ 2026-10-08 第七次实测：第二层根因也解决了（`wait all_lut_free` 超时 500ms→2000ms，v7G），
+> 六个档位全部零 reset、A2/DU4 解锁、`update_err` 归零 —— 见 §13.10。**
 
 ---
 
@@ -26,6 +33,21 @@
 **不经 scope 通道**；来源 = **`scrollingRefreshMode=2` 滚动特判**（API 改不动，只能走 UI）。
 **详见 §12 交接章节。**
 **仅剩 1 个未解项**：重启的真正触发源（`bootreason=reboot`，已排除崩溃/watchdog，需常驻 events log）。
+
+> ⚠️ **2026-09-29 第六会话修正（务必先读 §13）**：黑屏之外的主症状（刷新停滞 / 重置风暴 / 卡顿 / 日志风暴）
+> 根因已定位并**已修复**。`tps6518x` 的 DISPLAY regulator enable 回调
+> （Image 偏移 `0x5F4198`）判定"电源 OK"用的是 **`regmap_read(reg 0x0F) == 0xFA` 精确相等**
+> （`0x5F4374` / `0x5F47EC` 两处 `cmp w8,#0xfa`），而故障机该寄存器
+> **684 / 684 次回读恒为 `0xBA`**（与 `0xFA` 只差 bit6）⇒ **判据结构性不可满足**
+> ⇒ `regulator_enable(DISPLAY)` **恒返回 `-ETIMEDOUT`** ⇒
+> 每次 powerup 走 1.6 s 失败重试 + `regmap_write(reg 1, 0)` **反复拉低电源轨**
+> ⇒ 波形中止（LUT 卡在 `frame_cur` 1~2）⇒ `wait all_lut_free` 超时 ⇒ reset 风暴。
+>
+> **已刷入 v7A 内核**（只改这一处判据，其余 v6-A2 patch 不动）。实测（受控负载剖面 ×6 `TestWaveform(2)`）：
+> **reset 1→0、卡住的 LUT 3→0、`Reg PowerGood`/`Retry`/`Unable to enable DISPLAY`/`epdc power error`
+> /`wait all_lut_free timeout` 全部归零**；dmesg 由上万行降到 319 行。
+> §12.1 的「来源 = `scrollingRefreshMode=2`」与「提高重试频率」两条均已被实验否证（详见 §13.4）。
+> **回滚**：`dd if=/sdcard/boot_patched_a2_v6.img of=/dev/block/by-name/boot_b bs=4M` + 重启。
 
 ---
 
@@ -638,5 +660,377 @@ gcInterval = 20        animationDuration = 20   antiFlicker = 10
 
 ---
 
-*本文档由 2026-09-25 会话生成；§12 由 2026-09-29 第五会话追加。*
+---
+
+## 13. ★★★ 第六会话（2026-09-29）：根因定位 + 已修复（v7A 内核）
+
+> **一句话**：主症状的根因不是"供电偶发失败"，而是**一个恒假的软件判据** ——
+> `tps6518x` 用 **`power-good 寄存器（reg 0x0F）== 0xFA`** 判定上电成功，
+> 而故障机硬件**恒回读 `0xBA`**（只差 bit6），判据**永远不可能成立**。
+> 已用内核 patch（v7A）改这一处判据，**整条失败链路消失**。
+
+### 13.1 精确定位（反汇编，Image 偏移 = 文件偏移）
+
+DISPLAY regulator 的 enable 回调 = **`0x5F4198`**（历史上被记作 `onyx_epdc_powerup`）。
+失败返回 `w20 = -0x6e = -110 = -ETIMEDOUT`。
+
+```asm
+5f4308: ldr  w8, [x21, #0x84]      ; max_wait（DT = 24）
+5f430c: str  wzr, [sp, #4]         ; 预置 0：若跳过回读则恒 0
+5f431c: bl   0x5f4768              ; 谓词①：GPIO 路径（DT gpio_pmic_pwrgood = gpio 85）
+5f4324: cbnz w0, 0x5f443c          ; 成功 → w20 = 0
+5f4344: ldr  w8, [x21, #0x50]
+5f4348: cmp  w8, #0x500
+5f434c: b.lo 0x5f4370
+5f4350: bl   0x76e650              ; regmap_read(reg 1,   &sp[0])
+5f4360: bl   0x76e650              ; regmap_read(reg 0xF, &sp[4])   ★
+5f4370: ldr  w8, [sp, #4]
+5f4374: cmp  w8, #0xfa             ; ★★★ 唯一有效的成功判据
+5f4378: b.eq 0x5f443c              ; 相等 → 判成功
+5f437c: bl   0xce928               ; printk "Reg Enable: [0x1] 0x%X"
+5f4394: bl   0xce928               ; printk "Reg PowerGood: [0xf] 0x%X"
+5f43a4: bl   0xce928               ; printk "ERROR TPS6518x waiting for power good!"
+5f43ac: cmp  w24, #1               ; 重试上限（原 3，v5 改成 1）
+5f43b0: b.eq 0x5f4440              ; 用尽 → 返回 w20 = -110
+5f43b4: bl   0xce928               ; printk "Retry %d more times"
+5f43c8: bl   0x5f4488              ; retry-prep（内含 msleep）
+5f43d0: ...                        ; ★ regmap_write(reg 1, 0) = 拉低所有电源轨
+5f43e0: bl   0x76e6c0
+5f4410: mov  w0, #0x1e             ; msleep(30)（v5）
+5f4418: bl   0x5f4678              ; 重新上电 + 写 reg 1
+5f443c: mov  w20, wzr              ; ← 成功出口
+```
+
+谓词 `0x5F4768`：先走 **GPIO**（`chip+0x3c`，即 gpio 85，与 `chip+0x8c` 期望电平比较）；
+GPIO 无效时走 regmap（`0x5F47EC`，**同一个魔数 `0xFA`**）。
+⇒ 本次故障机上两条谓词同时为假。
+
+**DT 佐证**（`/sys/firmware/devicetree/base/soc/i2c@4a88000/tps6518x@68`）：
+`compatible="ti,tps6518x"`、`reg=0x68`（i2c-2）、`gpio_pmic_pwrgood=<17 85 0>`、
+`gpio_pmic_v3p3=<17 99 0>`、`gpio_pmic_vcom_ctrl=<17 93 0>`、`gpio_pmic_wakeup=<17 83 0>`、
+`max_wait=24`、`pwr_seq0/1/2=0xe1/0x30/0x33`、`upseq0/1=0xe4/0`、`dwnseq0/1=0x1e/0`、`vpos-mV=14250`。
+
+### 13.2 现场证据（v6-A2，uptime 15510 s）
+
+| 指标 | 值 |
+|---|---|
+| **`Reg PowerGood` 取值分布** | **{0xBA: 684}** ← 4 小时 18 分内**没有一次**不同 |
+| `Reg Enable` 取值分布 | {0xAF: 684} |
+| `ERROR TPS6518x waiting for power good!` | 684 |
+| `Unable to enable DISPLAY regulator.err = 0xffffff92` | 342 |
+| `wait all_lut_free timeout 500 ms` | 260 |
+| `reset cause` | 130（突发时 0.69 s 一次） |
+| `all_frames_completed[>0]` | **0 / 276** |
+| 276 次 `dump_lut_list` 快照的 `frame_cur` | **全部 1~2**（total 5/10/14/22/24/38 皆然） |
+
+### 13.3 v7 系列镜像（均在 v6-A2 基础上，只叠加少量 4 字节改动）
+
+构建：`_scratch_gs/patch_kernel_v7.py <变体> <out.img>`；
+校验：`_scratch_gs/gs_verify_v7.py A B C D E F`（结构 + 与 v6-A2 逐字比对）。
+
+> **管线可信性已验证**：用 `patch_kernel_v6.py`(mode=4) 重建的内核与**当时已刷入**的
+> `boot_patched_a2_v6.img` 内层内核 md5 完全一致（`a2ed97ff…`）。
+
+| 变体 | 追加改动 | boot md5 | kernel md5 | 结果 |
+|---|---|---|---|---|
+| **v7A** | `0x5F4374`/`0x5F47EC`：`cmp #0xfa` → `cmp #0xba`（承认硬件真实回读） | `836dc759ccdb47b267136b554472de7e` | `524ea940d3d4e5c6597cbc0679ad6a25` | ✅ **已刷入，实测有效** |
+| **v7F** | `0x5F43B0`：`b.eq 0x5F4440`(返回 -110) → `b 0x5F443C`(判成功)。**保留 printk 诊断** | `f76f8f578a5a9d29b3c5accd81743ee4` | `878801fdb097c4f96dcf8e0b9ca59c05` | 未刷；功能同 v7A，**建议长期版本** |
+| v7B | `0x5F4378` 改无条件跳成功 + `0x5F47F0` `mov w0,#1`（完全绕开判据） | `6f7da25c651bc291d8358c7eedd2d454` | `cf994ee2feafc0f033d45d7ffc3da671` | 未刷（比 A 更激进） |
+| v7C | `0x5F43DC`/`0x5F43E0` 置 `nop`（重试时不拉低电源轨，不改 PG 语义） | `c8b598d165dec891629ac33c6de63dbd` | `ba4e38693675f492b3c1a5e358dc1250` | 未刷 |
+| v7D | `0x5F4508` 1.55 s→50 ms + `0x5F43AC` 重试 1→3 | `e17aa32594db4c9c3da8c1e59ccd92eb` | `8d8deee347d3f11c8c4170a3b15c570a` | ❌ **已刷并实测：无效/更差**，见 §13.4 |
+| v7E | A + D | `9878fe7271e7f4268ee2c380dca68558` | `7782bd114f25e60d55b4865520d8f603` | 未刷 |
+| （回滚基线）v6-A2 | — | `c62600dd4bb3a1abcba0a0c0caaf75c6` | `a2ed97ff8c5f64304cd784e9e3213180` | 设备 `/sdcard/` 上有 |
+
+### 13.4 实测对照（同一受控负载剖面：6× `TestWaveform(2)` + dump_list + 20 s 静置）
+
+| 指标（约 45 s 窗口） | v6-A2 | v7D | **v7A** |
+|---|---|---|---|
+| `Reg PowerGood` / `Reg Enable` | 4 | 7 | **0** |
+| `Retry %d more times` | 2 | 6 | **0** |
+| `Unable to enable DISPLAY` | 2 | 1 | **0** |
+| `epdc power error` | 3 | 1 | **0** |
+| `wait all_lut_free timeout` | 2 | 8 | **0** |
+| `reset cause` | 1 | 4 | **0** |
+| **卡住的 LUT** | 3 | 7 | **0** |
+
+**v7D 的两条结论（都是有价值的否证）**：
+
+1. **v7D 的提速 patch 打错了地方（新发现）**：把 `0x5F4508` 压到 50 ms 后
+   `PG→PG` 间隔仍是 1.62~1.65 s ⇒ ref §11.8 的归因不完整。真正的 ~1.5 s 在
+   **`0x5F4744`：`ldr w0,[x19,#0x88]` → `msleep(chip+0x88)`**（"上电成功"出口），
+   v5/v7D 从未压过它。⚠️ 它在上电成功路径上，语义更像"电源轨稳定等待"，
+   **不宜盲压**（v4 教训同源）。
+2. **"提高重试频率"这条路已被实验否证**：重试 1→3 生效（PG/Retry 比 2.0→1.17），
+   但受控负载下 reset 1→4、超时 2→8 ⇒ **更差**。与 §13.2 的"判据恒假"完全一致：
+   重试节流只改变失败次数，不改变成功可能性。
+
+**v7A 静置 soak**（uptime 307→458 s，每 30 s）：`PG=0 reset=0 timeout=0 null=0` 全程；
+`frame[]` 持续增长（1282→1434）。唯一异常是 **t=22.79–23.46 s 的 2 次 reset + 3 次
+`waveform_desc is NULL`**（开机动画/systemui 启动那一刻的一次性瞬态），此后为零。
+
+### 13.5 安全性与副作用
+
+| 项 | 观测 |
+|---|---|
+| PMIC 温度（`tps6518x-sns/temp_input`） | 36–37 °C，无异常 |
+| 电池 | level 100 %，36.2 °C |
+| 电源轨 | 上电窗口内 **`DISPLAY` / `VCOM` / `V3P3` 三者同时 enabled**，空闲同时 disabled（正常节电） |
+| 内核日志 | reset/dump 风暴消失，dmesg 由上万行降到 **319 行**（少掉的 CPU/IO 开销是白赚的） |
+
+> ★ **顺带纠正**：ref/HANDOFF 曾把 `VCOM state=disabled` 与 `Reg PowerGood 0xBA` 并置，
+> 推断"4 轨中 2 轨坏 / 缺轨"。实测在 v7A 下 **VCOM 上电窗口里是 enabled 的** ——
+> 之前的 `VCOM=disabled` 只是**采样恰好落在 powerup 失败后的断电瞬间**，
+> 是"反复拉低电源轨"制造出来的假象。加之面板本来就能刷新，
+> **"带缺轨驱动面板"的风险评估应显著下调**；"bit6 是慢爬升/粘滞状态位，代码却要求精确 `0xFA`"
+> 更符合全部现象。
+
+### 13.6 ★ 这个改动的边界（务必记住）
+
+1. **v7A 让判据恒真 = 永久放弃 power-good 保护**。若日后 PMIC 或某轨真的损坏，
+   驱动不会再报错、不会重试，只会"以为一切正常"。
+   ⇒ **长期建议换 `boot_v7F.img`**：功能等价，但保留
+   `Reg Enable: [0x1] 0xAF` / `Reg PowerGood: [0xf] 0xBA` 两行 printk，可用于判断 PMIC 真实状态。
+2. **硬件仍是坏的**：TPS6518x 的 power-good 位确实不置起。v7A/v7F 只是让软件不再因此
+   反复断电与放弃刷新，**不是修好了芯片**。若哪天出现"彻底不刷新且无任何报错"，
+   先怀疑这个 patch 掩盖了真实硬件劣化。
+3. **未验证的更"正统"方案**：reg1（ENABLE）写的是 `(v74 & 0x30) | 0x0F`
+   （`0x5F42E0` = `0x32000D02` = `orr w2, w8, #0xf`），只置低 4 位；回读 `0xAF` 的 bit4 = 0。
+   若第 5 轨 enable 就是 **bit4(0x10)**，把它一起置上（`#0xf`→`#0x1f`，编码 `0x32001102`）
+   也许能让 PMIC **自己**把 PG 报成 `0xFA` —— 那才是"真修好"。
+   ⚠️ 纯属假设，需 datasheet 或量电压佐证；**只能在 v7A/v7F 基础上做对照，不要单独刷**。
+4. **仍需观察**：数小时~一天的长时间稳定性；以及人眼验收（刷新速度/残影/新瑕疵）。
+   截至交接时用户反馈"看起来还行，先测试一段时间"。
+
+### 13.7 刷入 / 回滚 / 验证（复制粘贴）
+
+```powershell
+# 刷入（已含回读校验的脚本在设备 /data/local/tmp/flash.sh）
+.\adb.exe -s 6C7F0E64 push boot_v7A.img /sdcard/boot_v7A.img
+.\adb.exe -s 6C7F0E64 shell 'su -c "sh /data/local/tmp/flash.sh boot_v7A.img 836dc759ccdb47b267136b554472de7e"'
+.\adb.exe -s 6C7F0E64 reboot
+
+# 回滚
+.\adb.exe -s 6C7F0E64 shell 'su -c "dd if=/sdcard/boot_patched_a2_v6.img of=/dev/block/by-name/boot_b bs=4M"'
+.\adb.exe -s 6C7F0E64 reboot
+
+# 判据（刷入后 3 分钟内即可判定）
+adb shell su -c "dmesg | grep -cE 'Reg PowerGood|Retry|Unable to enable DISPLAY|epdc power error|wait all_lut_free timeout|reset cause'"
+#   → v7A/v7F 期望：0（除 v7F 会保留 Reg PowerGood/Reg Enable 的读数行）
+```
+
+### 13.8 本次新增工具（`_scratch_gs/`，供接力）
+
+| 文件 | 用途 |
+|---|---|
+| `GS_FINDINGS_PMIC.md` | 本次完整报告（比本节更细，含全部反汇编与数据） |
+| `patch_kernel_v7.py` / `gs_verify_v7.py` | v7 构建 / 校验（与已刷镜像逐字比对） |
+| `gs_kernel_tool.py` | boot 镜像内核提取 + v6 复现验证 |
+| `gs_metrics.py` | dmesg 指标统计（支持"最后 N 秒"窗口，用于**同口径**对比） |
+| `gs_loadtest.sh` | 受控负载剖面（6× `TestWaveform(2)`），刷机前后对比用 |
+| `gs_flash.sh` | 带回读校验的刷入脚本 |
+| `push_sh.py` | **本地脚本 LF 化后 push 并执行** —— 一次绕开 CRLF 污染 + PowerShell 引号嵌套两个老坑 |
+
+### 13.9 ★★★ 副产物：v7A 之后哪些刷新档位能用（逐档位实测，2026-09-29 15:3x–15:4x）
+
+> 方法与坑规避：每组前 **静置 20 s + 清 scope**，再连发 n 次；每组单独 `dmesg -c` 后计数。
+> 全程 `epdc power error = 0`、`Reg PowerGood = 0` —— **所以本节的 reset 都不是 §13 的电源故障**，
+> 而是**第二套、与模式相关的 LUT 卡死机制**（全部卡在 `frame_cur = 2`）。
+
+**① 逐档位（n=5，`TestWaveform <值>`）**
+
+| 值 | 含义 | reset | reset/触发 | 卡住的 LUT |
+|---|---|---|---|---|
+| `1` | 裸 DU | **0** | 0 | — |
+| **`98`** | **GC16\|WAIT\|FULL = 清残影** | **0** | 0 | — |
+| `2` | 裸 GC16 | 1 | 0.2 | GC16 全屏 38 帧 cur2 ×1 |
+| `2312` | DU4 | 5 | **1.0** | DU4 **局部** 24 帧 cur2 ×5 |
+| `108` | DEEP_GC16\|WAIT\|FULL | 5 | **1.0** | DU 全屏 22 帧 cur2 ×4 |
+| `4` | 裸 A2 | **10** | **2.0** | A2 全屏 5 帧 cur2 ×8 |
+| `2308` | A2\|DITHER\|Y1 | 6 / 3 轮 | 2.0 | A2 全屏 5 帧 cur2 |
+
+**② scope 档位 + 真实 tap/swipe（各 4 轮）**
+
+| scope | 含义 | reset |
+|---|---|---|
+| `1` | DU | **0** |
+| `2` | GC16 | **0** |
+| `4` | A2 | **8**（仍 reset 循环） |
+| `2312` | DU4 | **4** |
+
+**③ ★ 清残影三条真实入口全部干净（各 ×3，另有 `98` ×5 与 ×3）**
+
+| 入口 | reset |
+|---|---|
+| `TestWaveform 98`（= `repaintEverything(98)`，另测 5 次亦 0） | **0 / 8** |
+| `VU applyGCOnce()` | **0 / 3** |
+| `am broadcast -a onyx.android.intent.action.REFRESH_SCREEN`（通知栏磁贴） | **0 / 3** |
+| 直接观察帧推进的那一次（屏幕唤醒 + 打开设置界面后触发 98） | ⚠️ **1 / 1** |
+
+⇒ 合计 **11 次干净 + 第 12 次 1 次 reset** ⇒ **清残影已基本可用，但不是 100%**。
+第 12 次卡住的**不是 GC16**，而是同批下发的 `waveform[1] update[1] frame_total[22]`（**DU 全屏**）：
+`magic[1026] lut[1] waveform[1] update[1] frame_cur[1..4]` —— 说明 98 的链路里还会夹一个
+DU 全屏子更新，**它才是残留的卡点**（与 §8.4 里 DU4/A2 的"差分模式 + 宽幅更新"同源）。
+⇒ 若要把清残影做到完全干净，下一个靶点是**那条 DU 全屏子更新**，不是 GC16 本身。
+
+★★ **直接证据：GC16 现在真的能跑完**（屏幕唤醒 + 设置界面在前台，触发 98，高频 `cat dump_list`）：
+同一个 LUT `magic[1027] lut[0] waveform[2] update[0] frame_total[38]` 被连续采到
+`frame_cur` = **2 → 3 → 4 → 5 … → 30 → 31 → 32 → 33 → 34 → 35 → 36 → 37**，然后从列表中消失（完成释放）。
+v6-A2 时代同一波形**永远停在 2/38**。
+（方法坑：`dump_list` 的活动 LUT 内容走 **printk → dmesg**，stdout 只回一个 `1`；
+且**必须先唤醒屏幕**，`mWakefulness=Asleep` 时 80 次 dump 全是 `is Empty`。）
+
+⇒ ★★★ **本条推翻 HANDOFF §6.4 与 ref §9.3.28⑤ 的核心结论**
+「整屏清残影（全屏 GC16）在故障机必然 reset ⇒ 与避免 reset 物理不可兼得」——
+当时实测「5 次中 3 次 reset」，那是 §13 的 **powerup 恒失败**造成的；
+电源判据修好后，**全屏 GC16 清残影 11 次调用零 reset**。
+
+**④ 结论：故障机现在的"可用档位"是**
+
+| 档位 | 故障机 | 说明 |
+|---|---|---|
+| None / NORMAL | ✅ | 清 scope，交系统默认 |
+| DU(1) | ✅ | 0/5；纯黑白 22 帧 |
+| GC16(2) | ✅（偶发 1/5） | 全屏/局部都基本可用；全屏偶发卡住 |
+| **清残影（98 全屏 GC16）** | ✅ **新解锁** | 磁贴 / `applyGCOnce()` / gcInterval 均走此路 |
+| A2(4) / 2308 | ❌ | 2 次 reset/触发，仍不可用 |
+| DU4(2312) | ❌ | 1 次 reset/触发（且是**局部** update，说明"全屏才 reset"的解释对 DU4 不成立） |
+| 108 DEEP_GC16+FULL | ❌ | 1 次 reset/触发（内部先走 DU 全屏，卡在那里） |
+
+⇒ **`RefreshModeHelper` 的档位表无需改动**（DU/GC16/NORMAL 照旧，A2/DU4 仍是"正常机专用"）；
+但 **① 代码注释里"A2/DU4 / 全屏 GC16 都必然 reset"的机制归因需要改**（A2/DU4 的根因是另一套机制）；
+**② 现在可以给故障机加"清残影"入口**（发广播最省事，无需反射、无需改 EAC）；
+**③ EAC「全刷频率」(gcInterval) / 「切页自动全刷」(useGCForNewSurface) 在故障机上不再必然 reset**
+（二者同走 `repaintEverything(98)` 路径，属推断，未单独实测），代价只是闪烁与变慢。
+
+> ⚠️ **仍未闭环**：A2 / DU4 / 108 为什么会卡在 `frame_cur = 2`（无任何电源报错）。
+> 候选方向：差分模式（A2 18/256、DU 42/256、DU4 84/256）在**全屏/宽幅更新**下的
+> state 覆盖不足；以及 v6-A2 的 reset **重排队**仍是 `movz w0,#4`(A2) 全屏 ——
+> 可能构成"卡死 → reset → 重排队 A2 全屏 → 又卡死"的自持环
+> （⇒ 值得试 **v7G = v7A + 重排队改回 DU(1)**，见 ref §十六.8）。
+> 另：裸 GC16(2) 的 1/5 偶发也需更长时间验证。
+>
+> **⇒ 上面这段已在 §13.10 被推翻并解决（2026-10-08）。**
+
+### 13.10 ★★★ 第七次实测（2026-10-08）：第二层根因找到 —— `wait all_lut_free` 超时被 v5 压得太短
+
+> **一句话**：`frame_cur = 2` **不是"卡住"** —— LUT 一直在正常推进。
+> reset 的真因是 **`wait all_lut_free` 的超时只有 500 ms，而一个全屏 GC16 要跑 ~426 ms**；
+> 两个全屏更新一排队（2×426≈850 ms）就必然超时 → reset → 重排队又一个全屏 → 级联。
+> **v5 当初把该超时从 5 s 压到 500 ms 是为了让"故障机的失败循环"更快 ——
+> 那个理由已随 §13 的 powerup 修复而消失，压短反而成了新的故障源。**
+
+#### ① 推翻"卡在 cur=2"的误判（本轮最重要的一条）
+
+用 `cat dump_list`（内容走 printk → dmesg）高频采样，实测**LUT 全程正常推进**：
+
+| LUT | 类型 | 帧数 | 实测耗时 |
+|---|---|---|---|
+| `magic[1027]` | GC16 **局部** | 38 | **426 ms**（0→37） |
+| `magic[1026]` | DU **全屏** | 22 | **358 ms**（1→…→21） |
+| `magic[4]` | A2 **全屏** | 5 | **25–40 ms**（1→2→3→4） |
+
+≈ **11 ms/帧**。而 reset 现场里那个"`frame_cur=2`"的 LUT，是**刚提交、才走了 2 帧**的那个 ——
+`dump_lut_list()` 只在 reset 内部打印（ref §9.3.18⑤ 的老陷阱），
+所以看到的永远是"超时那一刻恰好在飞的 LUT"，**不是卡住的 LUT**。
+
+#### ② 最硬的一组对照：两个等待门的超时次数
+
+| 等待门 | 语义 | 历史累计超时 |
+|---|---|---|
+| `0x542A70` `wait lut_free` | 等**某一个** LUT 空闲（局部更新走这条） | **0 次** |
+| `0x543110` `wait all_lut_free` | 等**所有** LUT 空闲（全屏更新走这条） | **260+ 次** |
+
+同一个设备、同一种波形，**只因为门更严就必然超时** ⇒ 指向"预算不够"，而不是"波形有问题"。
+
+#### ③ 链表泄漏是**结果**不是原因（另一个被排除的假设）
+
+`dump_full_marker_list` 在 reset 现场是 5→8→9→…→250 项，只增不减，一度像是根因。但**非 reset 时刻**的观测推翻了它：
+
+| 动作 | full_marker 项数 | reset |
+|---|---|---|
+| 基线 | 113 | — |
+| `98`(GC16\|FULL) ×4 | **110**（纹丝不动） | **0** |
+| `A2(4)` ×1 | 114 | — |
+| `A2(4)` ×2 | **242**（+128） | 有 |
+
+⇒ **110 项时 98 照样成功** ⇒ marker 表不是阻塞条件；它是 **A2 + reset 级联的副产品**。
+v7G 之后链表**自然排空到 0**（见 ⑤）。
+
+#### ④ v7G / v7H 镜像（= v7F + 把 `wait all_lut_free` 恢复）
+
+| 变体 | 改动 | boot md5 |
+|---|---|---|
+| **v7G** | `0x543110` `movz w1,#0x32`(50 jiffies=500 ms) → `#0xC8`(200=**2000 ms**)；`0x54314C` 日志参数 500→2000 | `96e2aec0b67a7c23b4d5ec3d4b52eb9c` |
+| **v7H** | 同上两处**直接回到 stock 值**：`#0x1F4`(500 jiffies=**5000 ms**) / 日志 `5000` | `39ec0cb43213803d9ac4b79e7c987fc7` |
+
+（单位 jiffies，HZ=100。stock 原值 500=**5 s**，v3 改 1 s、v5 改 500 ms；
+**v7H 等价于把 v3/v5 对这个等待的全部压缩整体撤销**。）
+v7H 与 v6-A2 逐字比对只有 **3 处不同**（v7F 的 1 处 + 超时 2 处），已用 `gs_verify_v7.py` 校验。
+
+#### ⑤ ★★★ 实测结果：**六个档位全部零 reset**
+
+同一脚本 `gs_v7g_test.sh`、同参数（每组前静置 20 s + 清 scope，n=5，含 swipe）：
+
+| 档位 | v6-A2 | v7A/v7F | **v7G**(2000ms) | **v7H**(stock 5000ms) |
+|---|---|---|---|---|
+| DU(1) | 0/5 | 0/5 | **0/5** | **0/5** |
+| GC16(2) | — | 1/5 | **0/5** | **0/5** |
+| `98` 清残影(GC16\|FULL) | 必 reset | 0/5 | **0/5** | **0/5** |
+| **A2(4)** | reset 循环 | **10/5** | **0/5** ✅ | **0/5** ✅ |
+| **DU4(2312)** | 死亡谷 | **5/5** | **0/5** ✅ | **0/5** ✅ |
+| **108** DEEP_GC16\|FULL | reset | **5/5** | **0/5** ✅ | **0/5** ✅ |
+
+**混合负载 soak（各 13.5 min，180 次刷新跨全档位 + 180 次滑动）—— 两个镜像结果一致**：
+
+```
+                      v7G          v7H
+frame            2053 → 8875   1905 → 8723
+reset cause           0             0
+wait all_lut_free     0             0
+epdc power error      0             0
+waveform NULL         0             0
+卡住 LUT            （空）        （空）
+WTF 增量             +7            +3
+marker/pending/lut    全 0          全 0
+update_err            0             0
+```
+
+> **v7G 与 v7H 在所有可测指标上等价。** 两者的差别只在**极端情况下**才体现：
+> 等待超时是"上界"而非固定延时（`wait_event` 条件满足即返回），
+> 所以 **5000 ms 不影响正常刷新的响应速度**，只在真出现卡死时把恢复时间从 2 s 拉到 5 s；
+> 反过来 2000 ms 对更深的排队余量略小。实测排队深度 `pending` 仅 2~6 项、`lut` 1~2 项，
+> 两个值都绰绰有余。
+> **⇒ 长期建议 v7H（stock 值，与所有正常 Poke6 的 EPDC 时序完全一致，最少"自创值"风险）；
+> 若哪天真的观察到长冻结，再换回 v7G。**
+
+#### ⑥ 两层根因（完整版）
+
+```
+第 1 层（§13，v7A/v7F 已修）：PMIC powerup 判据恒假 reg0x0F==0xFA(实读0xBA)
+  → 每次更新中途 regmap_write(reg1,0) 拉低电源轨 → 波形中止 → reset
+第 2 层（本节，v7G 新修）：wait all_lut_free 超时 500ms < 全屏 GC16 的 ~426ms（余量仅 15%）
+  → 全屏更新一排队（2×426≈850ms）必超时 → reset → 重排队全屏 → 级联
+  → v5 压短它的理由（加快故障机失败循环）已随第 1 层修复而消失
+```
+
+#### ⑦ 对代码/使用的影响
+
+| 项 | 变化 |
+|---|---|
+| **`RefreshModeHelper` 档位表** | **A2 / DU4 现在在故障机上也可用了** —— 注释里"A2/DU4 故障机必然 reset / 为正常机准备"**已过时**；DU4 是"4 级灰 + 24 帧"，是快与灰阶的折中，值得重估 |
+| 清残影 | 磁贴 / `applyGCOnce()` / gcInterval 全部安全 |
+| EAC「全刷频率」「切页自动全刷」 | 不再必然 reset（同走 98 路径） |
+| **建议长期版本** | **v7H**（stock 5000 ms，已刷入并实测）；备选 v7G（2000 ms，实测等价） |
+
+> ⚠️ **仍未闭环（诚实记录）**：`Reg PowerGood` 依旧**恒 0xBA**（本层与 PMIC 判据无关，
+> 只是不再让它决定成败）；PG 判据为何恒假仍需硬件侧（datasheet / 量电压）才能定论。
+> ~~把超时恢复成 stock 5000 ms 是否更好~~ → **已测（v7H），与 v7G 等价，见 ④⑤**。
+> 另：温度变量**未有效排除**（CPU 满载只把 PMIC 从 27→28 °C，需热风枪/环境箱）；
+> v7D 遗留的 `0x5F4744`（真正的 ~1.5 s msleep）**不建议盲压**。
+
+---
+
+*本文档由 2026-09-25 会话生成；§12 由 2026-09-29 第五会话追加；§13 由 2026-09-29 第六会话追加，
+§13.10 由 2026-10-08 第七次实测追加。*
 *ref.md 的 §9.3 开头有导读框，列出最优结论与已作废判据 —— 建议从那里进入详细内容。*
+*★ 第六会话另在 ref.md 追加了 `# 十六、故障机根因定位与修复` 一节。*
