@@ -408,6 +408,27 @@ public static final String CLEAR_GHOSTING_LABEL = "清残影 — 整屏全刷（
    ⇒ 也因此：`setAppScopeRefreshMode(0)`（= `official 0`）**只写 updateMode 字段**，而
    `caculateRefreshConfig` 在 idx≠NONE 时会**忽略该字段**并返回系统档数据 —— 想真正落回白名单，
    **必须写 `refreshModeIndex=NONE`**（本次 20 个 app 的清理正是这么做的）。
+9. ★★★ **`refresh_mode_N` → 有效 mode 实测映射（2026-10-09，`SetDefCfg sysidx` 读 `SysUIConfig`）**：
+   | idx | 有效 mode | 在白名单 `{0,3,5}`？ |
+   |---|---|---|
+   | `refresh_mode_1` | 5 (REGAL_PLUS) | ✅ |
+   | `refresh_mode_2` | **3 (REGAL)** | ✅ |
+   | `refresh_mode_3` | **2 (A2)** | ❌ |
+   | `refresh_mode_4` | 0 (NORMAL) | ✅ |
+   ⇒ **老版本 launcher 逐档写 EAC 留下的"`um=2`"只是表象**：真正把那些 app 挡在白名单外的是
+   **`refresh_mode_3`（→ mode 2）**。判据必须按 **idx** 算，不能只看 `updateMode` 字段。
+10. ★★★ **2026-10-09 清理结果（19 个第三方 app；已完成并实测）**：
+   - 工具：`SetDefCfg`（`_scratch_gs/SetDefCfg.java`；反射 `EACAppConfig.loadSavedConfig/save` +
+     `loadDefaultConfig/saveDefaultConfig`，**只改已存在的键**，先备份到 `eac_bak/<pkg>.{app,defcfg}.json`）
+     —— 与 CI 版 `GlobalEacRefreshHelper defcfg` 等价。
+   - ⚠️ **类名坑**：真实类名是 **`android.onyx.optimization.data.v2.EACAppConfig`**；反编译源码里的
+     `data.p008v2` 是 jadx 为避免与 `data.v1` 重名而改的（证据：其内部匿名类注释
+     "from class: ...data.v2.EACAppConfig.1"）。**用 `p008v2` 会 ClassNotFoundException**
+     （首次运行时 `app_process` 被 SIGKILL=137，就是因此）。
+   - **结果：18/19 的生效 theme（themeType 3）落到 `refresh_mode_2`（mode 3，白名单 ✅）**；
+     仅 **`com.legado.app.release` 仍是 `refresh_mode_3`（mode 2，非白名单 ❌）**，待单独处理。
+     `com.qidian.QDReader`（用户自设 mode 5）与 launcher 自身**未被扰动** ✓。
+   - 生效需重启（OECService 重载）；备份共 48 份（theme + app/defcfg），可回滚。
 
 ### 5.2 内核 patch
 
