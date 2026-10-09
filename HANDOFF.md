@@ -93,6 +93,7 @@
 | ★★ **`repaintEverything(V)` 前需有内容变化** | 屏幕内容无变化时调 `repaintEverything` 可能**无事可做**（实测多组 `dF=0`、零 `update_to_display`）⇒ 误判"该值无效" | 每组**先翻页改变内容**再测；判据用 `logcat \| grep -c 'update_mode = 1'` |
 | **PowerShell 内联 shell 语法** | `for f in …; do …; done` / `\$f` → `syntax error: unexpected 'do'`、`\$f` 被本地展开成 `C:\sys\…` | 整脚本 `push` 执行；或改用 PowerShell `foreach` 逐条调 adb |
 | ★ **跨时间窗口对比（本轮踩坑）** | 把「A 时刻的快翻」与「B 时刻的 idle」相比 ⇒ 得出「降低操作频率有效」的**错误结论**（实际是**硬件状态变了**，不是节奏变了）| 对照组必须**在同一时间窗口内交替进行**（顺序打乱）；任何跨时刻得出的结论，都要做**反向顺序复验**（本轮 `setUpdListSize` 与「降低操作频率」两条结论都是这样被推翻的）|
+| ★★ **adb 起不来：`cannot open …\Temp\adb.log: Permission denied`** | 2026-10-09 实测：会话沙箱把**派生进程的写操作限制在工作区内**，而 `%LOCALAPPDATA%\Temp` 在工作区**之外** ⇒ adb（客户端与守护进程）无法在那里创建日志文件，报 `failed to start daemon`。⚠️ **别去修 ACL**：`icacls`/`Get-Acl` 看 `%TEMP%` 与 `adb.log` 都是 `root:(F)`、无拒绝项，pwsh/cmd 也能在 `%TEMP%` 里建文件 —— 这属于「**工作区之外的写**」这一**预期内**的拒绝，不是 ACL 故障（ACL 诊断技能也把这类归为"应解释、不必修"）| **把 TEMP/TMP 指到工作区内目录再调 adb**：<br>`$env:TEMP='C:\Users\root\Documents\eink\.adbtmp'; $env:TMP=$env:TEMP; .\adb.exe devices -l`<br>⚠️ 每次 `pwsh` 调用都是新进程 ⇒ **每条** adb 命令都要带上。同因，其它往 `%TEMP%` 写的工具（gradle 等）也可能中招 |
 
 ### 1.4 ★ Git 推送
 
