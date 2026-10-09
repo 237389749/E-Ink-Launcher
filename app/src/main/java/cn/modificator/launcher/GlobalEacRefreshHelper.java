@@ -31,19 +31,32 @@ import org.json.JSONObject;
  *
  * cmd:
  *   set     <pkgCsv> <updateMode>   对每 pkg 全部 theme 写 NONE+updateMode（save-only）；首写前自动备份
+ *   defcfg  <pkgCsv> <updateMode>   ★2026-10-09 新增：改写"默认 app 配置"两条键的 refreshConfig
+ *                                   为 NONE+updateMode：`eac_app_<pkg>`（EACAppConfig.save()）与
+ *                                   `eac_default_app_config<pkg>`（saveDefaultConfig()），仅改已存在的键。
+ *                                   **为什么必须补这一步**：`set` 只写 theme，而
+ *                                   `EACThemeFactory.loadThemeOrCreate` 的回退链第 2 步是
+ *                                   `loadLowVersionAppConfigThemeOrNull`（= 从 `eac_app_<pkg>` 迁移）
+ *                                   ⇒ 只写 theme 会在 OECService 重载时**被覆盖回去**
+ *                                   （2026-10-09 实测：重启后 themeType 3 回到旧值，而它才是
+ *                                   `DEFAULT_ACTIVE_THEME` = 生效的那个）。
  *   restore <pkgCsv>                从备份恢复原 theme（save-only，用于"None/恢复默认"档）
  * 备份文件：/data/local/tmp/eac_bak/<pkg>.json（每行一个 theme JSON）
+ *           /data/local/tmp/eac_bak/<pkg>.{app,defcfg}.json（defcfg 命令的原始 JSON）
+ * ⚠️ `defcfg` **不新建**缺失的键（只改已存在的），故不会给本来没有默认配置的 app 造出新键。
  */
 public class GlobalEacRefreshHelper {
 
   private static final String TAG = "GlobalEacRefresh";
   private static final String BAK_DIR = "/data/local/tmp/eac_bak";
+  private static final String EAC_APP_CONFIG = "android.onyx.optimization.data.p008v2.EACAppConfig";
+  private static final String EAC_MMKV_BASE = "android.onyx.optimization.BaseMMKV";
 
   private static Class<?> eInkHelperClass;
 
   public static void main(String[] args) {
     if (args.length < 2) {
-      System.err.println("usage: GlobalEacRefreshHelper <set|restore> <pkgCsv> [updateMode] | official <logicMode>");
+      System.err.println("usage: GlobalEacRefreshHelper <set|defcfg|restore> <pkgCsv> [updateMode] | official <logicMode>");
       System.exit(2);
       return;
     }
@@ -71,9 +84,9 @@ public class GlobalEacRefreshHelper {
     }
     String[] pkgs = args[1].split(",");
     int mode = 0;
-    if ("set".equals(cmd)) {
+    if ("set".equals(cmd) || "defcfg".equals(cmd)) {
       if (args.length < 3) {
-        System.err.println("set requires updateMode arg");
+        System.err.println(cmd + " requires updateMode arg");
         System.exit(2);
         return;
       }
@@ -88,7 +101,9 @@ public class GlobalEacRefreshHelper {
     int skipCount = 0;
     for (String pkg : pkgs) {
       try {
-        String out = "set".equals(cmd) ? applySet(pkg, mode) : applyRestore(pkg);
+        String out = "set".equals(cmd) ? applySet(pkg, mode)
+            : "defcfg".equals(cmd) ? applyDefaultCfg(pkg, mode)
+            : applyRestore(pkg);
         if (out == null) {
           skipCount++;
           System.out.println("SKIP " + pkg + " (no themes)");
@@ -147,6 +162,49 @@ public class GlobalEacRefreshHelper {
     // 窗口重建风暴与系统重启，见类头注释）。
     eInkHelperClass.getMethod("saveEACAppThemes", List.class).invoke(null, edited);
     return "themes=" + n + " NONE+mode=" + mode + " (save-only)";
+  }
+
+  /** ★2026-10-09：把"默认 app 配置"（eac_app_<pkg> 与 eac_default_app_config<pkg>）的
+   *  refreshConfig 改成 NONE+mode，**只改已存在的键**。理由见类头 cmd 说明（只写 theme 会被重载覆盖）。 */
+  @SuppressWarnings("unchecked")
+  private static String applyDefaultCfg(String pkg, int mode) throws Exception {
+    Class<?> cfgCls = Class.forName(EAC_APP_CONFIG);
+    int n = 0;
+    n += writeDefaultCfgKey(cfgCls, "loadSavedConfig", "save",
+        "eac_app_" + pkg, pkg, "app", mode);
+    n += writeDefaultCfgKey(cfgCls, "loadDefaultConfig", "saveDefaultConfig",
+        "eac_default_app_config" + pkg, pkg, "defcfg", mode);
+    return n == 0 ? null : "defcfg keys=" + n + " NONE+mode=" + mode + " (save-only)";
+  }
+
+  private static int writeDefaultCfgKey(Class<?> cfgCls, String loader, String saver,
+                                        String mmkvKey, String pkg, String tag, int mode)
+      throws Exception {
+    Object cfg = cfgCls.getMethod(loader, String.class).invoke(null, pkg);
+    if (cfg == null) return 0;
+    Object activity = cfgCls.getMethod("getGlobalActivityConfig").invoke(cfg);
+    if (activity == null) return 0;
+    Object rc = activity.getClass().getMethod("getRefreshConfig").invoke(activity);
+    if (rc == null) return 0;
+    backupRawKey(mmkvKey, pkg, tag);
+    rc.getClass().getMethod("setRefreshModeIndex", String.class).invoke(rc, "NONE");
+    rc.getClass().getMethod("setUpdateMode", int.class).invoke(rc, mode);
+    cfgCls.getMethod(saver).invoke(cfg);
+    return 1;
+  }
+
+  /** 把某 MMKV 键改写前的原始 JSON 备份到 BAK_DIR/<pkg>.<tag>.json（只备份首次） */
+  private static void backupRawKey(String mmkvKey, String pkg, String tag) throws Exception {
+    File bak = new File(BAK_DIR, pkg + "." + tag + ".json");
+    if (bak.exists()) return;
+    Object raw = Class.forName(EAC_MMKV_BASE).getMethod("getString", String.class).invoke(null, mmkvKey);
+    if (raw == null) return;
+    File dir = new File(BAK_DIR);
+    if (!dir.exists() && !dir.mkdirs()) return;
+    try (OutputStreamWriter w = new OutputStreamWriter(
+        new FileOutputStream(bak), StandardCharsets.UTF_8)) {
+      w.write(String.valueOf(raw));
+    }
   }
 
   /** 从备份恢复原 theme（None/恢复默认档） */
