@@ -50,6 +50,13 @@ public class GlobalEacRefreshHelper {
   private static final String TAG = "GlobalEacRefresh";
   private static final String BAK_DIR = "/data/local/tmp/eac_bak";
   private static final String EAC_APP_CONFIG = "android.onyx.optimization.data.p008v2.EACAppConfig";
+  // ⚠️ 真实类名是 `data.v2`；`data.p008v2` 只是反编译源码里的改名（jadx 为避免与 `data.v1` 重名）。
+  // 证据：EACAppConfig.java 内部匿名类注释为 "from class: ...data.v2.EACAppConfig.1"。
+  // 2026-10-09 实测：只用 `p008v2` 会 ClassNotFoundException。两个都试，v2 优先。
+  private static final String[] EAC_APP_CONFIG_NAMES = {
+      "android.onyx.optimization.data.v2.EACAppConfig",
+      EAC_APP_CONFIG,
+  };
   private static final String EAC_MMKV_BASE = "android.onyx.optimization.BaseMMKV";
 
   private static Class<?> eInkHelperClass;
@@ -168,13 +175,26 @@ public class GlobalEacRefreshHelper {
    *  refreshConfig 改成 NONE+mode，**只改已存在的键**。理由见类头 cmd 说明（只写 theme 会被重载覆盖）。 */
   @SuppressWarnings("unchecked")
   private static String applyDefaultCfg(String pkg, int mode) throws Exception {
-    Class<?> cfgCls = Class.forName(EAC_APP_CONFIG);
+    Class<?> cfgCls = resolveAppConfigClass();
     int n = 0;
     n += writeDefaultCfgKey(cfgCls, "loadSavedConfig", "save",
         "eac_app_" + pkg, pkg, "app", mode);
     n += writeDefaultCfgKey(cfgCls, "loadDefaultConfig", "saveDefaultConfig",
         "eac_default_app_config" + pkg, pkg, "defcfg", mode);
     return n == 0 ? null : "defcfg keys=" + n + " NONE+mode=" + mode + " (save-only)";
+  }
+
+  /** 解析 EACAppConfig 的真名（`data.v2` 优先，`data.p008v2` 保底） */
+  private static Class<?> resolveAppConfigClass() throws Exception {
+    Throwable last = null;
+    for (String n : EAC_APP_CONFIG_NAMES) {
+      try {
+        return Class.forName(n);
+      } catch (Throwable t) {
+        last = t;
+      }
+    }
+    throw new Exception("EACAppConfig not found; tried both names", last);
   }
 
   private static int writeDefaultCfgKey(Class<?> cfgCls, String loader, String saver,
