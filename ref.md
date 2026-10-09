@@ -3011,6 +3011,20 @@ public static void debouncer(boolean z, int i, int i2, int i3, int i4) {
 - 若要自定义子路径模式 → 用 ⑤ 的直通 API，不要试图扩展 EAC 域。
 - **待验证**：周期 GC 的实际触发间隔 `gcInterval`（launcher 未写该字段，用系统默认）；以及 `debouncer(mode=108)` 是否真能让周期 GC 走 DEEP_GC（需真机实测）。
 
+> ⚠️ **2026-10-09 修正（源码复核；HANDOFF §5.1 第 5 条有完整表）**：本节②「**EAC mode 决定防抖/周期 GC 开关**」
+> 的表述**过于简化** —— 实际有**三条路，判据各不相同**：
+>
+> | 路径 | 判据 |
+> |---|---|
+> | `AccessibilityHelper.handleMotionWithSFDebouncer:132,148`（**主输入路径**）| **`EInkHelper.getAppScopeRefreshMode()`**（**设备级**，本机读数恒为 2）|
+> | `TabletEACRefreshImpl:188` / `OnyxBypassManager:192` | `caculateRefreshConfig(rc).getMode()`，**被 `refreshModeIndex` 覆盖**（`EACBaseRefreshImpl:61-73`）|
+> | `EACBaseRefreshImpl.increaseRepaintCount:103` | **原始 `rc.getUpdateMode()`**（唯一以该字段为硬判据的路）|
+>
+> ⇒ 「把 app 的 `updateMode` 改成 0 就能恢复周期 GC」**只对第三条路成立**；主输入路径看的是**设备级**读数。
+> ⇒ 要让第二、三条路一起落回白名单，必须写 **`refreshModeIndex=NONE` + `updateMode=0`**（NONE ⇒ 直通字段）。
+> ⇒ ★ **核验必须走系统 API 读回**（`io.onyx.DumpThemes <pkg>` = `EInkHelper.loadThemes`）；
+>   ⚠️ 用 `strings` + 「文件里最后一次出现」判断 MMKV 当前值是**假象**（文件内保留多个区域，实测两者不一致）。
+
 #### 9.3.7 ★★★ DU 的 dither 位机制 + launcher DU 档的正确修法（2026-09-23 深夜）
 
 > 起因：用户追问"du 不是靠填参数改变的吗？裸 du 不会没灰阶吧？xdu 不是 du 变种吧？"

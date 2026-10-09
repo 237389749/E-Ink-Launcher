@@ -372,6 +372,26 @@ public static final String CLEAR_GHOSTING_LABEL = "清残影 — 整屏全刷（
    **`GlobalEacRefreshHelper` 本体保留为手动工具**；设备侧建议一次性跑 `official 0` 恢复出厂值。
 3. EAC 实测**不影响**是否出全屏 reset（§9.3.17 实验 1 vs 2 同结果）
 4. ★ **DU4(2312) 已从档位表移除**（2026-10-08，仅删末尾项 ⇒ 已保存的档位 index 0~4 语义不变）
+5. ★★ **2026-10-09 修正 ref §9.3.6②「EAC mode 决定防抖/周期 GC 开关」的表述** —— 源码实测
+   （`res/eink-framework/.../optimization/`）：**有三条路，判据各不相同**，别再用"某个字段"一概而论：
+   | 路径 | 判据来自 | 受 per-app `updateMode` 字段影响？ |
+   |---|---|---|
+   | `AccessibilityHelper.handleMotionWithSFDebouncer:132,148`（**主输入路径**）| **`EInkHelper.getAppScopeRefreshMode()`**（设备级，本机读数恒为 **2**）| ❌ **不受影响** |
+   | `TabletEACRefreshImpl:188` / `OnyxBypassManager:192` | `caculateRefreshConfig(rc).getMode()` | ⚠️ **被 `refreshModeIndex` 覆盖**（`EACBaseRefreshImpl:61-73`：idx≠NONE 且系统档存在时直接返回系统数据，忽略字段）|
+   | `EACBaseRefreshImpl.increaseRepaintCount:103` | **原始 `rc.getUpdateMode()`** | ✅ 受影响 |
+   ⇒ 结论：`updateMode` 字段只在第三条路是硬判据；第一条路看**设备级**的 scope 读数。
+   ⇒ 而把 theme 写成 **`refreshModeIndex=NONE` + `updateMode=0`** 能同时让第二、三条路落回白名单
+   （NONE ⇒ 直通字段 ⇒ mode 0 ∈ {0,3,5}）。**改字段但不改 idx 只修第三条路。**
+6. ★★ **2026-10-09 一次性清理：20 个 app 的 EAC theme 恢复为 NONE + updateMode=0**
+   起因：老版本 launcher「逐档写 EAC」留下 18 个 app `updateMode=2`（=逻辑 A2，非白名单）
+   + `com.bilibili.comic` 的 `3`（applyFixedEac 残留）+ `com.legado.app` 的 `33554436`（UI 标志位误入字段）。
+   工具：`GlobalEacRefreshHelper set <pkgCsv> 0`（save-only，自动备份到 `/data/local/tmp/eac_bak/<pkg>.json`）；
+   **`com.qidian.QDReader`（用户自设 um=5）刻意保留**。核验方式：**必须用系统 API 读回**（`dth.dex` =
+   `io.onyx.DumpThemes <pkg>`），**不要用 `strings`+「最后一次出现」**—— 实测那是假象（见 §5.1-5 的教训）。
+   ⚠️ 生效需 OECService 重载 = **重启一次**。
+7. ⚠️ **未动 `applyFixedEac` 的设备残留**：只清了 theme（决策源）；`eac_app_<pkg>` 与
+   `eac_default_app_config<pkg>` 两个 **fallback** 键仍是旧值 —— 有 theme 时它们不参与决策，属惰性残留。
+   未跑 `official 0`（它会清全局 scope + 改写"当前前台 app"的配置，副作用大于收益）。
 
 ### 5.2 内核 patch
 
