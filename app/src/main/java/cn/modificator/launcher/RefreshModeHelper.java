@@ -5,11 +5,8 @@ import android.os.Build;
 import android.util.Log;
 import android.widget.Toast;
 
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
-import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.text.SimpleDateFormat;
@@ -39,11 +36,21 @@ import java.util.Locale;
  * 通道设计（ref.md §9.3.6 源码级定论）：
  * 1. scope（ViewUpdateHelper.applyAppScopeUpdate，null 包名 = 全局）是改变第三方 app 真实
  *    合成翻页波形的【唯一】有效主通道，且**接受任意 UI/EPD 值**（不经 EACUtils.toEpdMode）。
- * 2. EAC 通道的 updateMode 字段被 toEpdMode 硬归一化（非 0-5 → 5），承载不了
- *    2312 这类实测值；且切档批量写 12 个 app 会引发窗口重建风暴 → system_server WTF
- *    刷屏 → Watchdog 60s 重启（ref.md §12.7 实测撞上）。
- *    ⇒ **EAC 不随档位变**，由 {@link #applyFixedEac()} 一次性定死为 REGAL(3)
- *    （启用周期 GC + 滚动瞬态；其子路径模式恒为 toEpdMode(0)=AUTO=GC16 局部，实测安全）。
+ * 2. EAC 通道**完全不碰**（2026-10-09 决定，见下）：
+ *    · updateMode 字段被 toEpdMode 硬归一化（非 0-5 → 5），承载不了 2312 这类实测值；
+ *    · 切档批量写 12 个 app 的 theme 会引发窗口重建风暴 → system_server WTF → Watchdog 60s
+ *      重启（ref.md §12.7 实测撞上）。
+ * 3. ★ **已移除 `applyFixedEac()`（曾把 top app + fallback 定死为 REGAL(3)）** —— 三条原始
+ *    理由两条失效、一条冗余，而代价是真实的：
+ *      · 失效①：其子路径波形**恒为** `toEpdMode(0)`=AUTO，与 EAC mode 无关（§9.3.6②），
+ *        所以"定死"从来就没改变过子路径波形；且内核修好后全屏/A2 也不再 reset；
+ *      · 失效②：不再切档批量写 EAC ⇒ 防窗口风暴这条与"定死"无关；
+ *      · 冗余：出厂默认 `updateMode=0` **本就在白名单 {0,3,5} 内**（§9.3.29⑤ 实测 920 份
+ *        全是 0）⇒ 防抖/周期 GC 默认即启用；定死 3 的唯一净增量只是多开"滚动/触摸瞬态更新"；
+ *      · 代价：每次启动要 root（su + app_process）、持久写系统 MMKV 的 top app+fallback、
+ *        且官方 API 会覆盖全局 scope，调用方必须随后重新 apply 补救（自找竞态）。
+ *    ⇒ `GlobalEacRefreshHelper` 本体保留为**手动工具**（要用时自行 `su -c ... official N`）；
+ *      设备侧建议一次性跑 `official 0`，把 top app/fallback 恢复出厂值。
  *
  * 执行：切档与启动恢复均只走 scope 段（byPass 暂停 → 设 scope → 恢复 → 整屏全刷）。
  * {@link #applyWithEac(int)} 保留为 {@link #apply(int)} 的别名（兼容既有调用点）。
@@ -91,15 +98,11 @@ public class RefreshModeHelper {
   };
 
   private static final String VIEW_UPDATE_HELPER = "android.onyx.ViewUpdateHelper";
-  /** EAC 决策 API 所在类（boot classpath，root app_process 可加载；GlobalEacRefreshHelper 用） */
-  private static final String EAC_HELPER = "android.onyx.optimization.EInkHelper";
   private static final String LOG_FILE = "refresh_mode.log";
 
   private static Context appContext;
   private static Class<?> viewUpdateHelperClass;
-  private static Class<?> eacHelperClass;
   private static boolean inited;
-  private static boolean eacInited;
 
   private RefreshModeHelper() {}
 
@@ -130,23 +133,9 @@ public class RefreshModeHelper {
       }
       viewUpdateHelperClass = Class.forName(VIEW_UPDATE_HELPER);
       log("init: ViewUpdateHelper loaded, loader=" + viewUpdateHelperClass.getClassLoader());
-      initEac();
       return true;
     } catch (Throwable t) {
       log("init: ViewUpdateHelper FAILED: " + t);
-      return false;
-    }
-  }
-
-  /** EInkHelper 可用性探测（GlobalEacRefreshHelper 兜底通道；不可用则仅 scope） */
-  private static boolean initEac() {
-    if (eacInited) return eacHelperClass != null;
-    eacInited = true;
-    try {
-      eacHelperClass = Class.forName(EAC_HELPER);
-      return true;
-    } catch (Throwable t) {
-      log("init: EInkHelper unavailable (EAC channel disabled): " + t);
       return false;
     }
   }
@@ -181,65 +170,6 @@ public class RefreshModeHelper {
    */
   public static boolean applyWithEac(int index) {
     return apply(index);
-  }
-
-  /** EAC 定死值：逻辑 REGAL(3)。
-   *  依据 ref §9.3.6：EAC mode ∈ {0,3,5} 才启用防抖/周期 GC，1/2/4 会关闭它们；
-   *  且子路径模式恒为 toEpdMode(0)=5(AUTO) —— 实测 GC16 38 帧**局部**、reset 0（安全）。
-   *  选 3 而非 0：额外启用滚动/触摸瞬态更新（0 被 applyDebouncerTransientUpdateMode 排除）。 */
-  private static final int FIXED_EAC_LOGIC = 3;
-
-  /**
-   * 一次性把 EAC 定死为 {@link #FIXED_EAC_LOGIC}（手动调用；EAC 为 save-only，需重启后
-   * 由 OECService 重载才耐久生效）。
-   *
-   * 调官方 {@code EInkHelper.setAppScopeRefreshMode(3)}：改当前 top app + fallback 内存配置
-   * + saveDeviceConfig 持久化。**注意**：它会顺手设置 per-app scope，可能覆盖全局 null scope
-   * —— 调用方若要保持全局档位，请在其后重新 {@link #apply(int)}。
-   */
-  public static boolean applyFixedEac() {
-    if (!init() || !initEac()) return false;
-    try {
-      String clazz = GlobalEacRefreshHelper.class.getName();
-      String apk = appContext.getApplicationInfo().sourceDir;
-      String cmd = "CLASSPATH=" + apk + " app_process /system/bin " + clazz
-          + " official " + FIXED_EAC_LOGIC;
-      log("fixedEac: official -> su -c " + cmd);
-      String out = runRoot(cmd);
-      log("fixedEac: output:\n" + out);
-      boolean ok = out.contains("OK official");
-      toast(ok ? "EAC 已定死为 REGAL(3)" : "EAC 定死失败（见 refresh_mode.log）");
-      return ok;
-    } catch (Throwable t) {
-      log("fixedEac: EXCEPTION " + t + "\n" + stackTrace(t));
-      return false;
-    }
-  }
-
-  /** su + 执行，收集 stdout/stderr 合并输出（su 路径经 SuHelper 探测绝对路径） */
-  private static String runRoot(String cmd) throws Exception {
-    Process p = SuHelper.start(cmd);
-    if (p == null) {
-      return "su not available (SuHelper)\n";
-    }
-    StringBuilder sb = new StringBuilder();
-    InputStream is = p.getInputStream();
-    try (BufferedReader r = new BufferedReader(new InputStreamReader(is))) {
-      String line;
-      while ((line = r.readLine()) != null) {
-        sb.append(line).append('\n');
-      }
-    }
-    InputStream es = p.getErrorStream();
-    try (BufferedReader r = new BufferedReader(new InputStreamReader(es))) {
-      String line;
-      while ((line = r.readLine()) != null) {
-        sb.append("ERR ").append(line).append('\n');
-      }
-    }
-    p.waitFor();
-    sb.append("exit=").append(p.exitValue()).append('\n');
-    return sb.toString();
   }
 
   /** byPass 暂停 EPDC → 只设 scope → 恢复 → 模式走完后补一次「刷新屏幕」全刷
