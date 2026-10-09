@@ -389,11 +389,17 @@ public static final String CLEAR_GHOSTING_LABEL = "清残影 — 整屏全刷（
    **`com.qidian.QDReader`（用户自设 um=5）刻意保留**。核验方式：**必须用系统 API 读回**（`dth.dex` =
    `io.onyx.DumpThemes <pkg>`），**不要用 `strings`+「最后一次出现」**—— 实测那是假象（见 §5.1-5 的教训）。
    ⚠️ 生效需 OECService 重载 = **重启一次**。
-7. ⚠️ **`applyFixedEac` 的设备残留只清了 theme**：`eac_app_<pkg>` 与 `eac_default_app_config<pkg>`
-   两个 key 仍是旧值 —— 但**已证明是惰性的**：框架的决策路径
-   `EACDeviceConfig.getRefreshConfig()` → `getAppConfigByComponentName()` → `ensureAppConfig(pkg)`
-   → **`EACAppThemeManager.getActiveTheme(pkg).getAppConfig()`** ⇒ **读的是 theme**，
-   而每个 pkg 的 3 个 theme 都已被写成 `NONE + updateMode=0`。**有 theme 时那两个 fallback key 不参与。**
+7. ★★ **2026-10-09 更正（并撤销本文档先前"fallback key 是惰性的"结论）**：
+   **只写 theme 不持久。** 实测：`set <20 pkgs> 0` 后**重启前**用系统 API 读回确认三个 theme 都是
+   `NONE/0`；**重启（OECService 重载）后 themeType 3 又回到旧值**（legado/canta `refresh_mode_3 um=2`、
+   bilibili `um=3`），themeType 1/2 保持 NONE/0 ⇒ **净变化 ≈ 0**。
+   **原因（源码）**：`EACAppThemeManager.DEFAULT_ACTIVE_THEME = 3`，且
+   `getActiveThemeType(pkg) = EACAppTheme.getInt(prefix+pkg, 3)` ⇒ **生效的是 themeType 3**；
+   `getTheme()` 走 `EACThemeFactory.loadThemeOrCreate(...)`（"or create" —— 缺失/无效时
+   **由默认 app 配置重建**），而 `eac_app_<pkg>` / `eac_default_app_config<pkg>` 里仍是旧值。
+   ⇒ 即那两个 key **不是惰性的，而是重载时重建 active theme 的来源**。
+   ⇒ **要持久修复必须写默认 app 配置**（现有 `GlobalEacRefreshHelper` 只写 theme，需扩展）。
+   ⇒ 本次清理**未产生持久效果**，但**也没有副作用**（净状态 = 清理前），无需回滚。
 8. ★★ **`appScopeRefreshMode` 恒读 2 的真正原因（2026-10-09 定论）**：不是"读数不可信"，而是
    `OECService.getAppScopeRefreshMode()` → `getRefreshConfig(getCurrentTopComponent())`；
    在 **shell / 无前台**时 `getCurrentTopComponent()` 为 `null` → `ensureAppConfig(null)` →

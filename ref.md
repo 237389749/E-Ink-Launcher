@@ -3028,12 +3028,20 @@ public static void debouncer(boolean z, int i, int i2, int i3, int i4) {
 > ★★ **同日补充两个定论**（均由源码确证）：
 > 1. **框架决策读的是 theme**：`EACDeviceConfig.getRefreshConfig()` → `ensureAppConfig(pkg)` →
 >    **`EACAppThemeManager.getActiveTheme(pkg).getAppConfig()`**（`EACDeviceConfig.java:62-88`）。
->    ⇒ 写 theme 才是有效修复；`eac_app_<pkg>` / `eac_default_app_config<pkg>` 在有 theme 时**不参与**。
+>    ⇒ 写 theme 才是有效修复路径（但见下方第 3 条的持久性问题）。
 > 2. **`appScopeRefreshMode` 恒读 2 的真因**：`OECService.getAppScopeRefreshMode()` 用
 >    `getCurrentTopComponent()`；**shell/无前台时为 null** ⇒ `ensureAppConfig(null)` ⇒
 >    **`EACAppConfig.createDummyConfig()`** ⇒ 读到**占位配置**。不是"读数算法不可信"，是"没有前台对象"。
 >    ⇒ 且 `setAppScopeRefreshMode(N)` 只写 `updateMode` 字段，会被 `caculateRefreshConfig` 的
 >      idx 分支忽略 ⇒ **要让白名单生效必须写 `refreshModeIndex=NONE`**。
+> 3. ⚠️ **但只写 theme 不持久（2026-10-09 实测，撤销"fallback key 惰性"的说法）**：
+>    `set <20 pkgs> 0` 后重启前读回三 theme 均 `NONE/0`；**重启后 themeType 3 回到旧值**
+>    （legado/canta `refresh_mode_3 um=2`、bilibili `um=3`）⇒ 净变化 ≈ 0。
+>    原因：`EACAppThemeManager.DEFAULT_ACTIVE_THEME = 3` 且
+>    `getActiveThemeType(pkg) = EACAppTheme.getInt(prefix+pkg, 3)` ⇒ **生效的是 themeType 3**；
+>    `getTheme()` 走 `EACThemeFactory.loadThemeOrCreate(...)`，缺失/无效时**由默认 app 配置重建**
+>    —— 而 `eac_app_<pkg>` / `eac_default_app_config<pkg>` 仍是旧值 ⇒ **它们才是重建来源**。
+>    ⇒ 持久修复须写**默认 app 配置**（现有 helper 只写 theme，需扩展）。
 
 #### 9.3.7 ★★★ DU 的 dither 位机制 + launcher DU 档的正确修法（2026-09-23 深夜）
 
