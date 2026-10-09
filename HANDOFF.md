@@ -156,16 +156,18 @@ uptime  = ~32700 s（约 9 小时，未重启）
 | 项 | 值 |
 |---|---|
 | `launcherRefreshMode` | **2** → 新表 index 2 = **DU(1)**（2026-09-25 实测确认生效值）|
-| `EAC` 逻辑值 | 定死为 **3 (REGAL)**，由 `applyFixedEac()` 在 launcher 启动时写入 |
+| `EAC` 逻辑值 | ★ **不再由 launcher 定死**（2026-10-09 移除 `applyFixedEac`，见 §5.1）；设备上残留的 top app/fallback `updateMode=3` 建议跑一次 `official 0` 恢复出厂值 |
 | scope（运行时） | 由 launcher `apply()` 设置 |
+| 内核 | **v7H**（2026-10-08 刷入；修复两层根因，见 §13）|
 
 > ⚠️ **★ 索引语义（务必按这个读）**：
 > ```
-> SCOPE_VALUES = {-1, -1, 1, 2, 4, 2312}
-> MODE_NAMES   = {None, NORMAL, DU, GC16, A2, DU4}
+> SCOPE_VALUES = {-1, -1, 1, 2, 4}          ← 2026-10-08 起 5 档（DU4 已移除）
+> MODE_NAMES   = {None, NORMAL, DU, GC16, A2}
 >                              ↑index2      ↑index3
 > ```
 > ⇒ **index 2 = DU，index 3 = GC16**（§0 速览表旧版「index 2 = GC16」是**错的**，已更正）。
+> ⇒ 旧表 index 4 = A2（**不变**）、index 5 = DU4（**已移除**，仅可能影响"当年选过 DU4"的存档）。
 > 实测证据（2026-09-25 第二会话）：`refresh_mode.log` 末次切档为 `apply: globalScope DU -> ui=1`，
 > 且 `logcat | grep update_to_display` 显示 `waveform_mode = 1`（= DU）⇒ **实际生效 = DU**。
 > **判断实际生效档位请用 `fastModeIndex` + 实测波形（`update_to_display` 日志），不要只看 prefs。**
@@ -182,14 +184,23 @@ uptime  = ~32700 s（约 9 小时，未重启）
 | **`update_err`** | **1** | ★ **恒为 1**（上次失败未恢复的粘滞位）|
 | `frame[a:b:c]` | `32738:32737:32738` | a≠c ⇒ 有活动 |
 
+> ⚠️ **上表是 2026-09-25 的旧读数，已被 §13/§13.10 的修复取代。**
+> **2026-10-08 刷入 v7H 后的实测**（含 13.5 min 混合负载 soak）：
+> `reset cause 0` / `wait all_lut_free timeout 0` / `wait lut_free timeout 0` /
+> `epdc power error 0` / `waveform_desc is NULL 0` / `cant get free 0` / `Unable to enable 0` /
+> **`update_err = 0`**（历史上"恒为 1"的粘滞位，现在归零）。
+> ⚠️ 但 **`Reg PowerGood` 仍恒为 `0xBA`** —— 硬件 PG 位确实不置起，只是内核 patch 后
+> 不再让它决定成败（见 §13.6 边界说明）。
+
 ### 3.4 内核与镜像
 
 | 项 | 值 |
 |---|---|
-| 当前内核 | **v6-A2**（判定法：触发 reset 后重排队落 `waveform[6]/5`）|
+| 当前内核 | ★ **v7H**（2026-10-08 刷入 boot_b）：v6-A2 全部 9 处 patch + `0x5F43B0` 判成功（保留 `Reg PowerGood` 读数）+ `wait all_lut_free` 恢复 stock 5000 ms。见 §13 / §13.10 |
 | 仓库镜像 | `boot_patched_a2_v6.img` md5 `c62600dd4bb3a1abcba0a0c0caaf75c6` |
 | | `boot_patched_du_v6.img` md5 `43a4e312aa97e0fa6febd96f7ff00e87` |
-| 设备备份 | `/sdcard/boot_b_pre_v5.img`、`/sdcard/boot_b_pre_v6.img`、`/sdcard/boot_b_du_v6.img`、`/sdcard/boot_patched_a2_v6.img` |
+| | `boot_v7G.img` `96e2aec0b67a7c23b4d5ec3d4b52eb9c` / `boot_v7H.img` `39ec0cb43213803d9ac4b79e7c987fc7` |
+| 设备备份 | `/sdcard/boot_b_pre_v5.img`、`boot_b_pre_v6.img`、`boot_b_du_v6.img`、`boot_patched_a2_v6.img`、`boot_v7A/v7F/v7G/v7H.img` |
 
 **回滚方式**：`dd if=/sdcard/<备份>.img of=/dev/block/by-name/boot_b bs=4M` + 重启
 
@@ -329,25 +340,37 @@ TPS6518x 供电芯片故障
 **`RefreshModeHelper.java`**
 
 ```java
-private static final int[] SCOPE_VALUES = {-1, -1, 1, 2, 4, 2312};   // L63
-public static final String[] MODE_NAMES = {None, NORMAL, DU, GC16, A2, DU4};
-private static final int FIXED_EAC_LOGIC = 3;                        // L181
-// LABELS: None / NORMAL / DU—纯黑白·22帧·1bpp / GC16—16级灰·38帧·4bpp
-//         / A2—最快·5帧·无灰阶 / DU4—4级灰·24帧·2bpp
+private static final int[] SCOPE_VALUES = {-1, -1, 1, 2, 4};          // 5 档（DU4 已移除）
+public static final String[] MODE_NAMES = {None, NORMAL, DU, GC16, A2};
+// LABELS: None / NORMAL / DU—纯黑白·22帧·1bpp / GC16—16级灰·38帧·4bpp / A2—最快·5帧·无灰阶
+public static final int UI_GC16_FULL = 98;                            // 整屏清残影用
+public static final String CLEAR_GHOSTING_LABEL = "清残影 — 整屏全刷（GC16·38帧）";
 ```
 
 - `apply(int)` = 切档主入口：`byPass(10)` → 设 scope → `byPass(0)` → `fullRefreshScreen()`
-- `applyFixedEac()` — 启动时一次性把 EAC 定死 3（REGAL）
 - `applyPerApp(pkg, idx)` — per-app 走 scope 通道
-- `fullRefreshScreen()` — 反射调 `ViewUpdateHelper.repaintEverything()`
+- `fullRefreshScreen()` — 反射调**无参** `repaintEverything()`（只重画变化区域，带不上 FULL 位）
+- `clearGhosting()`（2026-10-08 新增）— 反射调 `repaintEverything(98)` = GC16|WAIT|FULL **整屏清残影**
+  （与通知栏磁贴 / `applyGCOnce()` / gcInterval 同一条路；内核修好后实测 0 reset）
+- ~~`applyFixedEac()`~~ — **2026-10-09 已移除**（见下）
 
 **`Launcher.java`**
-- `onCreate` 里：`RefreshModeHelper.init` → `apply(mode)` → 后台线程 `applyFixedEac()` → 再 `apply(mode)`
+- `onCreate` 里：`RefreshModeHelper.init` → `apply(mode)`（**只走 scope**；原先还会另起线程 `applyFixedEac()` 再补一次 `apply(mode)`）
 
-**关键设计决策（勿轻易改）**：
+**`SettingFragment.java`**
+- 刷新模式弹窗 = `LABELS`（5 档）+ 末尾追加 `CLEAR_GHOSTING_LABEL` 一项；
+  动作项**不放进 `LABELS`**，因为该数组同时被长按图标的 per-app 菜单复用
+
+**关键设计决策**：
 1. **切档只走 scope**，不批量写 EAC（避免窗口重建风暴 → system_server WTF → Watchdog）
-2. **EAC 定死 3(REGAL)**：白名单 `{0,3,5}` 才启用周期 GC + 滚动瞬态 + dither；`toEpdMode(3)=6` 走局部
+2. ★ **EAC 不再定死（2026-10-09 移除 `applyFixedEac`）**：原三条理由两条失效、一条冗余 ——
+   子路径波形恒为 `toEpdMode(0)`=AUTO【与 EAC mode 无关，§9.3.6②】；出厂默认 `updateMode=0`
+   本就在白名单 `{0,3,5}` 内（§9.3.29⑤ 实测 920 份全是 0）⇒ 防抖/周期 GC 默认即启用；
+   定死 3 的唯一净增量只是多开"滚动/触摸瞬态更新"。代价却是：每次启动要 root、
+   持久写系统 MMKV（top app + fallback）、且会覆盖全局 scope 需补救。
+   **`GlobalEacRefreshHelper` 本体保留为手动工具**；设备侧建议一次性跑 `official 0` 恢复出厂值。
 3. EAC 实测**不影响**是否出全屏 reset（§9.3.17 实验 1 vs 2 同结果）
+4. ★ **DU4(2312) 已从档位表移除**（2026-10-08，仅删末尾项 ⇒ 已保存的档位 index 0~4 语义不变）
 
 ### 5.2 内核 patch
 
