@@ -3024,6 +3024,16 @@ public static void debouncer(boolean z, int i, int i2, int i3, int i4) {
 > ⇒ 要让第二、三条路一起落回白名单，必须写 **`refreshModeIndex=NONE` + `updateMode=0`**（NONE ⇒ 直通字段）。
 > ⇒ ★ **核验必须走系统 API 读回**（`io.onyx.DumpThemes <pkg>` = `EInkHelper.loadThemes`）；
 >   ⚠️ 用 `strings` + 「文件里最后一次出现」判断 MMKV 当前值是**假象**（文件内保留多个区域，实测两者不一致）。
+>
+> ★★ **同日补充两个定论**（均由源码确证）：
+> 1. **框架决策读的是 theme**：`EACDeviceConfig.getRefreshConfig()` → `ensureAppConfig(pkg)` →
+>    **`EACAppThemeManager.getActiveTheme(pkg).getAppConfig()`**（`EACDeviceConfig.java:62-88`）。
+>    ⇒ 写 theme 才是有效修复；`eac_app_<pkg>` / `eac_default_app_config<pkg>` 在有 theme 时**不参与**。
+> 2. **`appScopeRefreshMode` 恒读 2 的真因**：`OECService.getAppScopeRefreshMode()` 用
+>    `getCurrentTopComponent()`；**shell/无前台时为 null** ⇒ `ensureAppConfig(null)` ⇒
+>    **`EACAppConfig.createDummyConfig()`** ⇒ 读到**占位配置**。不是"读数算法不可信"，是"没有前台对象"。
+>    ⇒ 且 `setAppScopeRefreshMode(N)` 只写 `updateMode` 字段，会被 `caculateRefreshConfig` 的
+>      idx 分支忽略 ⇒ **要让白名单生效必须写 `refreshModeIndex=NONE`**。
 
 #### 9.3.7 ★★★ DU 的 dither 位机制 + launcher DU 档的正确修法（2026-09-23 深夜）
 

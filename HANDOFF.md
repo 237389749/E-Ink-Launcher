@@ -389,9 +389,19 @@ public static final String CLEAR_GHOSTING_LABEL = "清残影 — 整屏全刷（
    **`com.qidian.QDReader`（用户自设 um=5）刻意保留**。核验方式：**必须用系统 API 读回**（`dth.dex` =
    `io.onyx.DumpThemes <pkg>`），**不要用 `strings`+「最后一次出现」**—— 实测那是假象（见 §5.1-5 的教训）。
    ⚠️ 生效需 OECService 重载 = **重启一次**。
-7. ⚠️ **未动 `applyFixedEac` 的设备残留**：只清了 theme（决策源）；`eac_app_<pkg>` 与
-   `eac_default_app_config<pkg>` 两个 **fallback** 键仍是旧值 —— 有 theme 时它们不参与决策，属惰性残留。
-   未跑 `official 0`（它会清全局 scope + 改写"当前前台 app"的配置，副作用大于收益）。
+7. ⚠️ **`applyFixedEac` 的设备残留只清了 theme**：`eac_app_<pkg>` 与 `eac_default_app_config<pkg>`
+   两个 key 仍是旧值 —— 但**已证明是惰性的**：框架的决策路径
+   `EACDeviceConfig.getRefreshConfig()` → `getAppConfigByComponentName()` → `ensureAppConfig(pkg)`
+   → **`EACAppThemeManager.getActiveTheme(pkg).getAppConfig()`** ⇒ **读的是 theme**，
+   而每个 pkg 的 3 个 theme 都已被写成 `NONE + updateMode=0`。**有 theme 时那两个 fallback key 不参与。**
+8. ★★ **`appScopeRefreshMode` 恒读 2 的真正原因（2026-10-09 定论）**：不是"读数不可信"，而是
+   `OECService.getAppScopeRefreshMode()` → `getRefreshConfig(getCurrentTopComponent())`；
+   在 **shell / 无前台**时 `getCurrentTopComponent()` 为 `null` → `ensureAppConfig(null)` →
+   **`EACAppConfig.createDummyConfig()`** ⇒ 读的是**占位配置**，故恒为 2。
+   ⇒ 判读实际生效档位**不要依赖这个 getter**，用 `fastModeIndex` + `dumpsys activity` 看真实前台。
+   ⇒ 也因此：`setAppScopeRefreshMode(0)`（= `official 0`）**只写 updateMode 字段**，而
+   `caculateRefreshConfig` 在 idx≠NONE 时会**忽略该字段**并返回系统档数据 —— 想真正落回白名单，
+   **必须写 `refreshModeIndex=NONE`**（本次 20 个 app 的清理正是这么做的）。
 
 ### 5.2 内核 patch
 
