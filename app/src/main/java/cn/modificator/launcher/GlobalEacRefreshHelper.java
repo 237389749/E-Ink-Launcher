@@ -41,9 +41,22 @@ import org.json.JSONObject;
  *                                   （2026-10-09 实测：重启后 themeType 3 回到旧值，而它才是
  *                                   `DEFAULT_ACTIVE_THEME` = 生效的那个）。
  *   restore <pkgCsv>                从备份恢复原 theme（save-only，用于"None/恢复默认"档）
+ *   reset   [pkgCsv]                ★2026-10-11：还原为原始状态（修复旧版本写坏的值）。
+ *                                   省略 pkgCsv 时自动枚举 MMKV 里所有 `eac_app_<pkg>`。
+ *                                   写入 idx=NONE + updateMode=5(REGAL_PLUS) + alias=""：
+ *                                   NONE 让刷新引擎的写入能被采纳；5 不在固件迁移表里 ⇒ 不会被改写。
  * 备份文件：/data/local/tmp/eac_bak/<pkg>.json（每行一个 theme JSON）
  *           /data/local/tmp/eac_bak/<pkg>.{app,defcfg}.json（defcfg 命令的原始 JSON）
  * ⚠️ `defcfg` **不新建**缺失的键（只改已存在的），故不会给本来没有默认配置的 app 造出新键。
+ *
+ * ⚠️⚠️ **值域纪律（2026-08-30~09-05 事故的根因）**：`updateMode` 只接受 **EAC 逻辑域 −1..5**。
+ *   当时的 launcher 版本用 `MODE_VALUES = {UI_NONE, UI_GU_MODE, …, UI_REGAL_PLUS_MODE(9), …}`
+ *   去写 EAC，把**波形/UI 域的 9** 写进了逻辑域字段。后果是**永久性**的：
+ *   9 不在固件 `refreshMigrateMap {0→3,1→2,2→2,3→5,4→2}` 里 ⇒ `validateRefreshConfig`
+ *   永远不会修正它 ⇒ `caculateRefreshConfig` 恒返回 9 ⇒ `setAppRefreshModeImpl` 走
+ *   `dumpError("Incorrect target system refresh mode") + return`、`applyUpdateMode` 的 switch
+ *   也没有 case 9 ⇒ **刷新引擎（通知栏面板/全局档）点了完全没反应**（连对话框都勾不上单选钮）。
+ *   ⇒ `set`/`defcfg` 已加逻辑域校验；历史上被写坏的用 `reset` 修。
  */
 public class GlobalEacRefreshHelper {
 
@@ -58,12 +71,17 @@ public class GlobalEacRefreshHelper {
       EAC_APP_CONFIG,
   };
   private static final String EAC_MMKV_BASE = "android.onyx.optimization.BaseMMKV";
+  private static final String DEFAULT_APP_KEY = "eac_default_app_config";
+  /** reset 写入的 updateMode：EAC 逻辑域的 REGAL_PLUS。选它是因为它**不在**固件迁移表
+   *  {0→3, 1→2, 2→2, 3→5, 4→2} 里 ⇒ validateRefreshConfig 不会改写，配置能稳定留住。 */
+  private static final int RESTORE_UPDATE_MODE = 5;
 
   private static Class<?> eInkHelperClass;
 
   public static void main(String[] args) {
-    if (args.length < 2) {
-      System.err.println("usage: GlobalEacRefreshHelper <set|defcfg|restore> <pkgCsv> [updateMode] | official <logicMode>");
+    // reset 允许只给命令（自动枚举 MMKV 里所有 eac_app_<pkg>）；其余命令必须有 pkgCsv
+    if (args.length < 1 || (args.length < 2 && !"reset".equals(args[0]))) {
+      System.err.println("usage: GlobalEacRefreshHelper <set|defcfg|restore> <pkgCsv> [updateMode] | reset [pkgCsv] | official <logicMode>");
       System.exit(2);
       return;
     }
@@ -89,15 +107,31 @@ public class GlobalEacRefreshHelper {
       }
       return;
     }
-    String[] pkgs = args[1].split(",");
+    String[] pkgs;
     int mode = 0;
-    if ("set".equals(cmd) || "defcfg".equals(cmd)) {
-      if (args.length < 3) {
-        System.err.println(cmd + " requires updateMode arg");
-        System.exit(2);
-        return;
+    if ("reset".equals(cmd)) {
+      // reset 可省略 pkgCsv：直接从 MMKV 枚举所有 eac_app_<pkg>（也覆盖已卸载 app 的残留）
+      pkgs = (args.length >= 2 && args[1].length() > 0) ? args[1].split(",") : enumeratePkgs();
+      mode = RESTORE_UPDATE_MODE;
+    } else {
+      pkgs = args[1].split(",");
+      if ("set".equals(cmd) || "defcfg".equals(cmd)) {
+        if (args.length < 3) {
+          System.err.println(cmd + " requires updateMode arg");
+          System.exit(2);
+          return;
+        }
+        mode = Integer.parseInt(args[2]);
+        // ★ 值域纪律：只允许 EAC 逻辑域 −1..5。9/98/33554436 等是波形域/UI 域值，
+        //   写进 updateMode 会让刷新引擎永久空转（9 不在固件迁移表里，永不被修正）
+        if (mode < -1 || mode > 5) {
+          System.err.println("FAIL mode=" + mode
+              + " 不在 EAC 逻辑域 -1..5。波形/UI 域值（9=REGAL_PLUS, 98=GC16|FULL, 33554436=MONO_A2 等）"
+              + "写进 updateMode 会使刷新引擎永久失效；如需修复请用 reset");
+          System.exit(3);
+          return;
+        }
       }
-      mode = Integer.parseInt(args[2]);
     }
     if (!init()) {
       System.err.println("FAIL EInkHelper unavailable");
@@ -106,10 +140,17 @@ public class GlobalEacRefreshHelper {
     }
     int okCount = 0;
     int skipCount = 0;
+    if ("reset".equals(cmd)) {
+      String g = resetGlobalDefault();
+      if (g != null) System.out.println("OK <global default> -> " + g);
+    }
     for (String pkg : pkgs) {
+      pkg = pkg.trim();
+      if (pkg.length() == 0) continue;
       try {
         String out = "set".equals(cmd) ? applySet(pkg, mode)
             : "defcfg".equals(cmd) ? applyDefaultCfg(pkg, mode)
+            : "reset".equals(cmd) ? applyReset(pkg)
             : applyRestore(pkg);
         if (out == null) {
           skipCount++;
@@ -225,6 +266,102 @@ public class GlobalEacRefreshHelper {
         new FileOutputStream(bak), StandardCharsets.UTF_8)) {
       w.write(String.valueOf(raw));
     }
+  }
+
+  /** ★2026-10-11 「还原为原始状态」：把该 pkg 的 EAC refreshConfig 写回
+   *  **idx=NONE + updateMode=5 + alias=""**（理由见 RESTORE_UPDATE_MODE 与类头值域纪律）。
+   *  同时覆盖三条键：theme（决策源）、eac_app_<pkg>、eac_default_app_config<pkg>（重建来源）。 */
+  private static String applyReset(String pkg) throws Exception {
+    Class<?> cfgCls = resolveAppConfigClass();
+    int n = 0;
+    n += writeResetKey(cfgCls, "loadSavedConfig", "save", "eac_app_" + pkg, pkg, "app");
+    n += writeResetKey(cfgCls, "loadDefaultConfig", "saveDefaultConfig",
+        DEFAULT_APP_KEY + pkg, pkg, "defcfg");
+
+    int t = 0;
+    List<String> themes = (List<String>) eInkHelperClass
+        .getMethod("loadThemes", String.class).invoke(null, pkg);
+    if (themes != null && !themes.isEmpty()) {
+      backupIfAbsent(pkg, themes);
+      List<String> edited = new ArrayList<>();
+      for (String s : themes) {
+        if (s == null) continue;
+        edited.add(resetThemeJson(s));
+        t++;
+      }
+      if (!edited.isEmpty()) {
+        eInkHelperClass.getMethod("saveEACAppThemes", List.class).invoke(null, edited);
+      }
+    }
+    if (n == 0 && t == 0) return null;
+    return "app/defcfg=" + n + " themes=" + t
+        + " NONE+um=" + RESTORE_UPDATE_MODE + "+alias=\"\" (save-only)";
+  }
+
+  private static int writeResetKey(Class<?> cfgCls, String loader, String saver,
+                                   String mmkvKey, String pkg, String tag) throws Exception {
+    Object c = cfgCls.getMethod(loader, String.class).invoke(null, pkg);
+    if (c == null) return 0;
+    backupRawKey(mmkvKey, pkg, tag);
+    resetRefresh(cfgCls, c);
+    cfgCls.getMethod(saver).invoke(c);
+    return 1;
+  }
+
+  /** theme 是 JSON 字符串；与 applySet 同法改写三个字段 */
+  private static String resetThemeJson(String theme) throws Exception {
+    JSONObject root = new JSONObject(theme);
+    JSONObject rc = root.getJSONObject("appConfig")
+        .getJSONObject("globalActivityConfig")
+        .getJSONObject("refreshConfig");
+    rc.put("refreshModeIndex", "NONE");
+    rc.put("updateMode", RESTORE_UPDATE_MODE);
+    rc.put("refreshModeAlias", "");
+    return root.toString();
+  }
+
+  /** 无 pkg 后缀的全局默认键——影响所有"没有自定义配置"的 app */
+  private static String resetGlobalDefault() {
+    try {
+      Class<?> cfgCls = resolveAppConfigClass();
+      Object g = cfgCls.getMethod("loadGlobalDefaultAppConfig").invoke(null);
+      if (g == null) return null;
+      backupRawKey(DEFAULT_APP_KEY, "global", "defcfg");
+      resetRefresh(cfgCls, g);
+      cfgCls.getMethod("saveGlobalDefaultConfig").invoke(g);
+      return "NONE+um=" + RESTORE_UPDATE_MODE + "+alias=\"\" (save-only)";
+    } catch (Throwable t) {
+      System.err.println("resetGlobalDefault failed: " + t);
+      return null;
+    }
+  }
+
+  private static void resetRefresh(Class<?> cfgCls, Object appConfig) throws Exception {
+    Object act = cfgCls.getMethod("getGlobalActivityConfig").invoke(appConfig);
+    Object rc = act.getClass().getMethod("getRefreshConfig").invoke(act);
+    rc.getClass().getMethod("setRefreshModeIndex", String.class).invoke(rc, "NONE");
+    rc.getClass().getMethod("setUpdateMode", int.class).invoke(rc, RESTORE_UPDATE_MODE);
+    rc.getClass().getMethod("setRefreshModeAlias", String.class).invoke(rc, "");
+  }
+
+  /** reset 省略 pkgCsv 时：枚举 MMKV 里所有 eac_app_<pkg>（也覆盖已卸载 app 的残留配置） */
+  private static String[] enumeratePkgs() {
+    try {
+      Object keys = Class.forName(EAC_MMKV_BASE)
+          .getMethod("getKeysByPrefix", String.class).invoke(null, "eac_app_");
+      if (keys instanceof java.util.Set) {
+        List<String> out = new ArrayList<>();
+        for (Object k : (java.util.Set<?>) keys) {
+          String s = String.valueOf(k);
+          if (s.startsWith("eac_app_")) out.add(s.substring("eac_app_".length()));
+        }
+        System.out.println("enumerated " + out.size() + " pkg(s) from MMKV");
+        return out.toArray(new String[0]);
+      }
+    } catch (Throwable t) {
+      System.err.println("enumeratePkgs failed: " + t);
+    }
+    return new String[0];
   }
 
   /** 从备份恢复原 theme（None/恢复默认档） */

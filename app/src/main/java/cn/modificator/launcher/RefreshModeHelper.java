@@ -309,6 +309,46 @@ public class RefreshModeHelper {
     }
   }
 
+  /** 设置页「刷新模式」弹窗里追加的"还原为原始状态"项文字（同为动作项，不进入 {@link #LABELS}） */
+  public static final String RESET_LABEL = "还原为原始状态（修复刷新残留）";
+
+  /**
+   * 还原为原始状态：把每个 app 的 EAC refreshConfig 写回 **idx=NONE + updateMode=5 + alias=""**。
+   *
+   * 为什么是这组值（2026-10-11 在正常机 6C1BF7D9 实测，非推测）：
+   *  · `refreshModeIndex=NONE` 是刷新引擎能生效的**前提**：idx≠NONE 时 `caculateRefreshConfig`
+   *    会忽略 `updateMode` 直接返回系统档的 mode ⇒ 通知栏面板/全局档的写入等于丢进黑洞
+   *    （实测：`com.onyx`/`refresh_mode_4` 与 legado/`refresh_mode_3` 两种情况下点 DU 后
+   *    `ViewUpdateHelper.getFastModeIndex()` 都**不变**）；
+   *  · `updateMode=5`（逻辑域 REGAL_PLUS）**不在**固件 `refreshMigrateMap {0→3,1→2,2→2,3→5,4→2}`
+   *    里 ⇒ `validateRefreshConfig` 不会改写它；写 0 则会被改写成"等价索引"，从而再次挡住引擎；
+   *  · 实测：reset 后重启，配置保持 NONE+5；面板点 DU → `getFastModeIndex 0→2`、点 Normal → `2→0` ✓。
+   *
+   * 历史事故（本命令要修的东西）：2026-08-30~09-05 的 launcher 版本用
+   * `MODE_VALUES = {UI_NONE, …, UI_REGAL_PLUS_MODE(9), …}` 写 EAC，把**波形/UI 域的 9**
+   * 写进了逻辑域字段；9 不在迁移表里 ⇒ 永不被修正 ⇒ 引擎**永久空转**。
+   *
+   * ⚠️ 必须**后台跑**：本机 `eac_app_*` 有上百个，耗时远超 {@link SuHelper} 的 8s 超时；
+   *    写入是 save-only，fire-and-forget 安全（结果写 /data/local/tmp/eac_reset.log）。
+   * ⚠️ **生效需重启**：运行中的 OECService 会把内存里的旧值回写覆盖我们的写入。
+   */
+  public static boolean resetRefreshConfig() {
+    if (appContext == null) return false;
+    if (!SuHelper.isAvailable()) {
+      toast("需要 root（Magisk）");
+      return false;
+    }
+    String apk = appContext.getPackageCodePath();
+    // nohup env …（不能用 `nohup VAR=value cmd`：nohup 会把 VAR=value 当成要 exec 的程序）
+    String inner = "env CLASSPATH=" + apk
+        + " app_process /system/bin cn.modificator.launcher.GlobalEacRefreshHelper reset";
+    String cmd = "nohup " + inner + " > /data/local/tmp/eac_reset.log 2>&1 &";
+    boolean ok = SuHelper.execOk(cmd);
+    log("reset: " + cmd + " -> " + (ok ? "STARTED" : "FAILED"));
+    toast(ok ? "已开始还原刷新配置，重启后生效" : "还原失败（见 refresh_mode.log / su_debug.log）");
+    return ok;
+  }
+
   /** root 执行 settings put global hidden_api_policy 1（Magisk su；非 root 设备静默失败） */
   private static boolean enableHiddenApiPolicyViaRoot() {
     boolean ok = SuHelper.execOk("settings put global hidden_api_policy 1");

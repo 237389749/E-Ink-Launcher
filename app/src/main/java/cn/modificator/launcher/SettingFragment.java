@@ -146,17 +146,19 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
   }
 
   /** 全局刷新模式选择弹窗。
-   *  末尾追加一项「清残影」—— 它是**动作**而非档位，故不放进 {@link RefreshModeHelper#LABELS}
-   *  （那个数组同时被长按图标的 per-app 菜单使用，塞进去会出现无意义的 per-app「清残影」）。 */
+   *  末尾追加两个**动作**项（非档位，故不放进 {@link RefreshModeHelper#LABELS}
+   *  —— 那个数组同时被长按图标的 per-app 菜单使用，塞进去会出现无意义的 per-app 项）：
+   *  ① 清残影（一次性整屏全刷）；② 还原为原始状态（修复刷新残留，需重启生效）。 */
   private void showRefreshModeDialog() {
     if (!RefreshModeHelper.isAvailable()) {
       Toast.makeText(getActivity(), "此设备不支持 EPD 模式切换", Toast.LENGTH_SHORT).show();
       return;
     }
     final String[] modeLabels = RefreshModeHelper.LABELS;
-    final String[] items = new String[modeLabels.length + 1];
+    final String[] items = new String[modeLabels.length + 2];
     System.arraycopy(modeLabels, 0, items, 0, modeLabels.length);
     items[modeLabels.length] = RefreshModeHelper.CLEAR_GHOSTING_LABEL;
+    items[modeLabels.length + 1] = RefreshModeHelper.RESET_LABEL;
     new AlertDialog.Builder(getActivity())
         .setTitle(R.string.setting_refresh_mode)
         .setItems(items, new DialogInterface.OnClickListener() {
@@ -165,6 +167,11 @@ public class SettingFragment extends Fragment implements View.OnClickListener {
             if (which == modeLabels.length) {
               // 清残影：一次整屏全刷，**不改变**已保存的档位，也不离开设置页
               RefreshModeHelper.clearGhosting();
+              return;
+            }
+            if (which == modeLabels.length + 1) {
+              // 还原为原始状态：修复历史上被写坏的值（需 root；重启后生效），不改变已保存档位
+              RefreshModeHelper.resetRefreshConfig();
               return;
             }
             if (RefreshModeHelper.applyWithEac(which)) {
