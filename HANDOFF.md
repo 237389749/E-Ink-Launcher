@@ -459,6 +459,20 @@ public static final String CLEAR_GHOSTING_LABEL = "清残影 — 整屏全刷（
    - ⚠️ 工具坑：`su -c "nohup VAR=value cmd"` 会失败（nohup 把 `VAR=value` 当程序名）⇒ 用 `nohup env VAR=value cmd`；
      且 PowerShell 里 `tr "\n" ","` 的 `\n` 会被吃掉变成 `tr "n" ","`，把包名里的 n 全换成逗号（本次误写 13 组垃圾键，
      已用 `FixEac rm` 清除并复核：theme 键 166→127）。**构造包名清单一律走设备端脚本，不要在 PowerShell 里拼。**
+13. ⚠️⚠️ **清理"写坏的值"必须按 MMKV 键枚举，不能用 `pm list packages -3`**：
+   - 2026-10-11 全量重置时只用了 `pm list packages -3`（已安装的第三方包）⇒ **漏掉了已卸载 app 的残留**，
+     事后扫描（`FixEac keys eac_app_` 枚举全部键 + `read` 复核）发现 **`com.example.piliplus` 与
+     `moe.shizuku.privileged.api` 仍是 `um=9`**。按 MMKV 键重做后才清零（86 个 pkg 全 `NONE+5`，`um=9` 0 处）。
+   - **正确姿势**：`PKGS=$(FixEac keys eac_app_ | grep '^eac_app_' | sed 's/^eac_app_//' | tr '\n' ',')`
+     ⇒ 再 `FixEac fix "$PKGS" 5`；完成后**重启**再 `read` 复核（运行中的 OECService 会回写内存旧值，不重启复核会误判）。
+   - ⚠️ 判定"还有没有坏值"要用**当前值**（`read` 逐 pkg 取 `eac_app_`/theme），不要用工具输出的字符串包含关系
+     （本次 ② 段的 `um=9 x0` 这类文字会被误匹配成 12 处"命中"）。
+   - 📌 **历史时间线（可复用于判断"哪个版本写的"）**：会写 UI/波形域值（含 `UI_REGAL_PLUS_MODE=9`）的是
+     `605d356` … `c4bef37`（**2026-08-30 ~ 09-05** 发布的版本）；`0bf8ed5`（09-10）起改为逻辑域。
+     正常机的 09-10 theme 备份（`eac_bak/*.json`，时间戳 09-10 01:01/11:57）里 `um=9` 出现 **0** 次 ⇒
+     **`9` 是 09-10 之后写进去的**。app 卸载后 `dumpsys package` 的版本/安装时间与 `/data/data/<pkg>` 日志都会消失，
+     且 Magisk 在这台机上**没有持久命令行日志**（`/data/adb/magisk.log`、`/cache/magisk.log` 均不存在）⇒
+     **具体版本号与写入时刻不可追溯**，只能给上面两条边界。
 
 ### 5.2 内核 patch
 
