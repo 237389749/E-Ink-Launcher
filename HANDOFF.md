@@ -473,6 +473,19 @@ public static final String CLEAR_GHOSTING_LABEL = "清残影 — 整屏全刷（
      **`9` 是 09-10 之后写进去的**。app 卸载后 `dumpsys package` 的版本/安装时间与 `/data/data/<pkg>` 日志都会消失，
      且 Magisk 在这台机上**没有持久命令行日志**（`/data/adb/magisk.log`、`/cache/magisk.log` 均不存在）⇒
      **具体版本号与写入时刻不可追溯**，只能给上面两条边界。
+14. ★★★ **2026-10-11 二次精修：写出 `9` 的版本窗口 + 取证方法（本节结论更精确，以本节为准）**：
+   - **取证方法（可复用）**：APK 里 `META-INF/version-control-info.textproto` 记录 **构建时的 git revision** ⇒
+     任何 CI 包都能反查精确提交（`[IO.Compression.ZipFile]` 直接读条目即可，无需解压）。配合
+     `git cat-file -e <rev>:<path>` 与 `git show <rev>:…RefreshModeHelper.java` 即可判定"该构建有没有 EAC 写入能力 / 档位表属于哪个域"。
+   - **实测三份归档包**：`/sdcard/app-release.apk`=`fb465a5`(2026-07-22，**无 EAC 代码**)；
+     工作区 `app-release.apk`=`b78814c`(08-24，无 `RefreshModeHelper`)；
+     `_scratch_gs/ci60/app-release.apk`=`c707645`(09-08 11:44，**UI 域表但 `GlobalEacRefreshHelper` 被 R8 删除**，仅 `PerAppRefreshHelper` 存活)；
+     `_scratch_gs/ci_fix/app-release.apk`=`c35f860`(09-10 14:13，**已是逻辑域**，不可能写 9)。
+   - ⇒ **真正能写出 `9` 的窗口 = `605d356`(09-10 00:56) ~ `0bf8ed5`(09-10 12:04) 这约 11 小时内的构建**
+     （既满足"keep 规则已修 ⇒ helper 真的能跑"，又满足"档位表仍是 UI 域"）。结合 `eac_bak` 时间戳
+     **09-10 11:57** 落在该窗口内 ⇒ **那次运行即写出 `9` 的元凶**；且当版是"统一写所有 app"的形态
+     （`c707645` 的提交标题即 "per-app unified config"）⇒ **一次运行就把 9 写进所有 app**，与残留的广泛性吻合。
+   - ⚠️ 该窗口内的 APK 本地**没有归档** ⇒ 无法给出精确 commit；能给的边界是上面那条 11 小时窗口 + 写入时刻 09-10 11:57。
 
 ### 5.2 内核 patch
 
