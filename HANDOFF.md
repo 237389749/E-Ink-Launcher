@@ -429,6 +429,36 @@ public static final String CLEAR_GHOSTING_LABEL = "清残影 — 整屏全刷（
      仅 **`com.legado.app.release` 仍是 `refresh_mode_3`（mode 2，非白名单 ❌）**，待单独处理。
      `com.qidian.QDReader`（用户自设 mode 5）与 launcher 自身**未被扰动** ✓。
    - 生效需重启（OECService 重载）；备份共 48 份（theme + app/defcfg），可回滚。
+11. ★★★ **2026-10-11 定论：旧版 launcher 把"波形/UI 域"的值写进了 EAC"逻辑域"字段 = 刷新引擎永久失效的根因。**
+   - **时间线（git 实证）**：`605d356` … `c4bef37`（2026-08-30 ~ 09-05 发布）的
+     `MODE_VALUES = { UI_NONE, …, **UI_REGAL_PLUS_MODE(9)**, … }`；这些值经 `GlobalEacRefreshHelper set`
+     写进 `refreshConfig.updateMode`。09-10 的 `0bf8ed5` 已改用逻辑域 `LM_*`（新伤害止住），
+     **但已落盘的 9 不会被任何机制清掉**。
+   - **为什么是永久性**：固件 `SysUIConfig.getRefreshMigrateMap(第三方) = {0→3, 1→2, 2→2, 3→5, 4→2}`
+     —— **9 不在表里** ⇒ `ValidateAppConfigAction.validateRefreshConfig` 永不改写它（它只迁移表内的值）。
+     而 `caculateRefreshConfig` 返回 mode=9 ⇒ `setAppRefreshModeImpl` 走
+     `dumpError("Incorrect target system refresh mode") + return`、`applyUpdateMode` 的 switch 无 case 9
+     ⇒ **通知栏面板/全局档点了完全没反应**（`OnyxRefreshModeController.updateDialogCurrentSelection`
+     只认 {0,1,2,4}，读到 9 时**一个单选钮都不勾**）。
+   - **值域对照**：逻辑域 `Constant.UPDATE_MODE_*`（DU=1/A2=2/REGAL_PLUS=5）；
+     波形/UI 域 `ViewUpdateHelper.EINK_WAVEFORM_MODE_*` 与 `UI_*_MODE`（REGAL_PLUS=**9**、GC16|FULL|WAIT=98）。
+12. ★★★ **修复/还原方案（已实测于正常机 6C1BF7D9）**：把 config 写成
+   **`refreshModeIndex="NONE"` + `updateMode=5` + `refreshModeAlias=""`**。
+   - 为什么必须是这三个值：
+     · `NONE` 是引擎能生效的**前提**——idx≠NONE 时 `caculateRefreshConfig` 忽略 `updateMode`
+       （两次独立实测：`refresh_mode_3`/`refresh_mode_4` 下点 DU，`getFastModeIndex()` 纹丝不动）；
+     · `5` 是合法逻辑域值且**不在迁移表**里 ⇒ 扛得住 `validateRefreshConfig`（写 0 会被改写为"等价索引"从而再次挡住引擎）；
+     · alias 是旧版遗留的 UI 域串（`hd/du/regal_plus/smooth/new_speed`），本机这批 pkg 的 alias 映射表为空，留着无意义。
+   - **实测证据**：重置后 → 面板点 DU `getFastModeIndex 0→2`、点 Normal `2→0` ✓；**重启后仍是 `NONE+5`** ✓。
+   - **落地**：launcher 弹窗新增「还原为原始状态」（`RefreshModeHelper.RESET_LABEL/resetRefreshConfig` +
+     `SettingFragment` 追加项 + `GlobalEacRefreshHelper reset`，后台 `nohup env … &` 跑，因 `SuHelper` 只有 8s 超时）；
+     且 `set/defcfg` 已加**逻辑域校验（−1..5）**，此类事故不会再犯。
+   - ⚠️ **残留的固件限制**：面板一旦写入 `um∈{0,1,2,3,4}`，**下次重启**会被迁移成"等价索引"，
+     该 app 又会回到"被索引覆盖 ⇒ 切换无效" ⇒ 需再点一次还原，或用**优化引擎里的 per-app 下拉**（它写的就是索引）。
+   - ⚠️ 教训：**给 EAC 写值前必须确认值域**；`9/98/33554436` 这类值一旦进 `updateMode` 就是不可逆的（除手动 reset）。
+   - ⚠️ 工具坑：`su -c "nohup VAR=value cmd"` 会失败（nohup 把 `VAR=value` 当程序名）⇒ 用 `nohup env VAR=value cmd`；
+     且 PowerShell 里 `tr "\n" ","` 的 `\n` 会被吃掉变成 `tr "n" ","`，把包名里的 n 全换成逗号（本次误写 13 组垃圾键，
+     已用 `FixEac rm` 清除并复核：theme 键 166→127）。**构造包名清单一律走设备端脚本，不要在 PowerShell 里拼。**
 
 ### 5.2 内核 patch
 
