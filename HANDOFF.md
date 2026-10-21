@@ -489,13 +489,33 @@ public static final String CLEAR_GHOSTING_LABEL = "清残影 — 整屏全刷（
 
 ### 5.2 内核 patch
 
-| 脚本 | 作用 |
+| 脚本（已收进 `tools/kernel/`） | 作用 |
 |---|---|
-| `_scratch_gs/patch_kernel_v6.py <mode>` | 9 处 patch（v5 的 7 处 + 重排队 2 处）。`mode`: 1=DU / 4=A2 / 8=DU4 |
-| `_scratch_gs/rebuild_boot_v6.py <out>` | 重打包 boot 镜像 |
+| `patch_kernel_v6.py <mode>` | 9 处 patch（v5 的 7 处 + 重排队 2 处）。`mode`: 1=DU / 4=A2 / 8=DU4 |
+| `rebuild_boot_v6.py <out>` | 重打包 boot 镜像 |
+| `patch_kernel_v7.py --variant <A..H>` | v7 系列（PG 判据旁路 + `all_lut_free` 超时） |
+| `gs_kernel_tool.py` / `gs_verify_v7.py` | 拆包（已验证能复现 v6-A2）+ 结构校验/word diff |
+| `gs_flash.sh` | 设备端写 + 回读 + 校验 |
 
 **重排队 patch 位置**：`0x542B0C` 与 `0x5431AC`（`movz w0,#N`）
 **当前设备**：`N=4`（A2）→ reset 后重排队走 `[6]/5` 帧
+
+#### 已归档的 boot 镜像（2026-10-22 核验 md5）
+
+| 镜像 | 大小 | md5 | 用途 |
+|---|---|---|---|
+| `boot_v7H.img` | 16.2 MB | `39ec0cb43213803d9ac4b79e7c987fc7` | **推荐长期版**（v7F 保留 PG 读数 + `all_lut_free` 恢复 stock 5000 ms） |
+| `boot_v7G.img` | 16.2 MB | `96e2aec0b67a7c23b4d5ec3d4b52eb9c` | 回退版（2000 ms；出现长冻结时用） |
+
+- 存放：本机工作区根目录 `C:\Users\root\Documents\eink\`；故障机 `/sdcard/` 另有 v7A–v7F、v5/v6 等历史镜像。
+- ⚠️ **不要 `git add`**：16 MB 二进制会**永久**撑大仓库历史；需要对外发布请挂 **GitHub Release 资产**。
+- 刷写（脚本自带写 + 回读 + 校验）：
+  ```
+  adb -s 6C7F0E64 push boot_v7H.img /data/local/tmp/
+  adb -s 6C7F0E64 shell 'su -c "sh /data/local/tmp/gs_flash.sh /data/local/tmp/boot_v7H.img 39ec0cb43213803d9ac4b79e7c987fc7"'
+  adb -s 6C7F0E64 reboot
+  ```
+  ⚠️ 切勿用内联复合 `su -c "…;…"`（会丢 root）；脚本须单独 `adb push` 后以 `su -c "sh …"` 执行。
 
 ---
 
