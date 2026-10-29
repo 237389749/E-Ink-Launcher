@@ -134,6 +134,9 @@ git push origin v0.x        # 代理可用时（当前 127.0.0.1:7890 在运行�
 | **ref.md** | 工作区根（**仓库外**）| 项目完整日志 5684 行，§9.3 是核心 | 要查具体推导过程/历史结论 |
 | **WBF_FRAMES.md** | 仓库根 | 8×14 帧数矩阵（较旧，已被 WAVEFORM_TO_DISPLAY 覆盖）| 仅供参考 |
 | **boot-patches/README.md** | 仓库根 | 早期内核 patch 包说明 | 要刷 v3/v4 老版本 |
+| **BOOT-MODE-POSTMORTEM.md** | 仓库根 | 四种启动模式实测、两个根因、检查清单 | 动 boot/recovery/OTA 前**必读** |
+| **RECOVERY-EDL.md** | 仓库根 | 变砖后只写 2 个分区（misc + recovery_b） | 设备卡 logo / 无 USB 时 |
+| **DEBLOAT-AND-BOOTMODES.md** | 仓库根 | 预装清理 + ABL/recovery 静态分析 | 要清预装 / 理解 fastboot 能力 |
 
 **ref.md 阅读提示**：§9.3 开头有「导读框」，列明 4 条最优结论 + **已作废的中间论断**。
   顺序为 `9.3.1 → 9.3.21 → 9.3.23`（21 与 23 已在末尾）。

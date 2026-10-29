@@ -88,3 +88,39 @@ adb -s <serial> shell 'su -c "CLASSPATH=/data/local/tmp/fixeac.dex app_process /
 | `push_sh.py` | CRLF→LF 后推送并执行（`EINK_DEV=<serial>` 指定设备） |
 | `gs_lint_java.py` | 括号配平 + 数组长度一致性（本地编译的替代检查） |
 | `gs_import_check.py` | 未用 import 检查 |
+
+---
+
+## 4. `boot/` — 启动模式实测 / recovery / 救砖
+
+**结论**：ABL fastboot 是死的（`18D1:4EE2` 只活 ~5 秒）；fastbootd（`adb reboot fastboot`，
+`18D1:4EE0`）可用，但只能刷逻辑分区；原厂 recovery 无 e-ink UI、adb 默认 `unauthorized`；
+唯一硬兜底是 EDL（短接/工程线）。详见 `BOOT-MODE-POSTMORTEM.md`、`RECOVERY-EDL.md`。
+
+| 文件 | 作用 |
+|---|---|
+| `mk-recovery-adb.py` | 从官方 `recovery.img` 生成「默认开 adb」的 recovery（init.rc + `ro.adb.secure=0` + `/adb_keys`），并**重算 `recovery_dtbo_offset`** |
+| `flash-recovery-adb.ps1` | dd 备份→写→整分区回读校验（带 `-WhatIf`） |
+| `diag-boot.ps1` | 依次探测 fastboot / recovery / fastbootd 的真实能力 |
+
+**硬规则**：改 boot image 后必须重算 `recovery_dtbo_offset`（0x664），否则 ABL 按旧偏移取到
+垃圾 dtbo，recovery 直接挂、BCB 里的 `boot-recovery` 清不掉 → 卡 logo 循环。
+`mk-recovery-adb.py` 自带「原 kernel+原 ramdisk 逐字节回归」和偏移自检。
+
+> 脚本按「仓库根有 adb.exe/fastboot.exe，否则查 PATH」找工具；`mk-recovery-adb.py`
+> 默认读 `ota/images/recovery.img`，不在固件目录下运行时用 `--src` / `--out` 指定。
+
+---
+
+## 5. `debloat/` — 预装用户级禁用
+
+只做 `pm disable-user` / `pm uninstall --user 0`，随时 `pm enable` / `install-existing` 回滚；
+不动 system/super/AVB，不影响 OTA 签名。包清单与理由见 `debloat-list.json`（t1–t4 分层），
+判断依据见 `DEBLOAT-AND-BOOTMODES.md`。
+
+| 文件 | 作用 |
+|---|---|
+| `debloat.ps1` | `list` / `status` / `apply -Tier t1` / `rollback -Tier all`，带 `-WhatIf` 和日志 |
+| `debloat-list.json` | 包名、层级、体积、`keep` 列表（不该动的包） |
+
+> 需要设备 root（Magisk su）。`pm disable-user` 对 protected package（systemui/settings）会失败，属预期。
