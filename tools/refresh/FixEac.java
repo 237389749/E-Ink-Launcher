@@ -134,6 +134,13 @@ public class FixEac {
             say("  isEnable ERR " + t);
         }
         try {
+            // ★ OECService 的运行时值才是权威（EInkHelper.enable 只是进程内缓存）
+            Object svc = Class.forName(EINK).getMethod("getService").invoke(null);
+            say("  OECService.isEnable() = " + svc.getClass().getMethod("isEnable").invoke(svc));
+        } catch (Throwable t) {
+            say("  OECService.isEnable ERR " + t);
+        }
+        try {
             say("  getAppScopeRefreshMode() = " + Class.forName(EINK).getMethod("getAppScopeRefreshMode").invoke(null));
         } catch (Throwable t) {
             say("  getAppScopeRefreshMode ERR " + t);

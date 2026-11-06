@@ -76,12 +76,23 @@ python tools/einkimg/find_ext4.py super.img
 
 ## 2. `refresh/` — 刷新引擎 / EAC（per-app 刷新模式）
 
+> **★ 2026-11-07 修正（先读这条，否则会把设备再写坏）**
+> 下面 2026-10-11 的「修复值 `idx=NONE + um=5`」**已经作废，不要再写**。
+> 实机 + 反编译定论（`HANDOFF.md` §14.23/§14.24）：
+> `NONE` 会让官方 EInk Center 的 `SelectRefreshModeAction` **静默空转** ——
+> 它先跑 `filter(isRefreshModeIndexChanged())`、后赋值 `realRefreshModeIndex`，
+> 而 `RefreshModeIndex.toEnum(null) == NONE`，所以「当前 idx 是 NONE」时 filter 恒 false，
+> 整个动作被跳过（不写盘、不 apply）。表现为**点净清/标准/极速完全没反应**（这正是一线症状）。
+> 正确做法：**idx 必须是合法 `refresh_mode_N`**；有 NONE 残留就删掉让它回出厂默认
+> （`FixEac rmnone`），而不是再写 NONE。历史值域事故（um=9）的修复值 `um=5` 仍然有效，
+> 但要配合法 idx 或直接删键。
+
 **症状**：通知栏「优化引擎」→ 应用优化 → 刷新模式，切换后**毫无反应**。
 **根因**：EAC 的 `updateMode` 被写成了**波形/UI 域**的值（`UI_REGAL_PLUS_MODE = 9`），
 而 `updateMode` 属**逻辑域**（−1..5）。`9` 不在固件迁移表里 ⇒ 永不被修正 ⇒
 `setAppRefreshModeImpl` 直接 `dumpError("Incorrect target system refresh mode") + return`。
 
-**修复值（已实测）**：`refreshModeIndex = "NONE"` + `updateMode = 5` + `refreshModeAlias = ""`
+**旧修复值（2026-10-11，已被上面的 11-07 结论取代）**：`refreshModeIndex = "NONE"` + `updateMode = 5` + `refreshModeAlias = ""`
 
 - `NONE`：唯一能让引擎写入被采纳的状态（`idx≠NONE` 时 `caculateRefreshConfig` 忽略 `updateMode`）
 - `5`：合法逻辑域值，且**不在**迁移表 `{0→3,1→2,2→2,3→5,4→2}` 里 ⇒ 扛得住 `validateRefreshConfig`
@@ -112,13 +123,23 @@ MMKV 里**没有 `um=9` 这类写坏的值**，但所有 `eac_app_*` 与全局�
 | 文件 | 作用 |
 |---|---|
 | `EacInfo.java` | 只读诊断：设备级读数、`refresh_mode_N`→mode 映射、每 pkg 的 idx/um + theme 明细 |
-| `FixEac.java` | 主工具：`read` / `setmode` / `fix` / `keys` / `rm` / `migrate` / `sysmap` / `aliasmap` |
+| `FixEac.java` | 主工具：`read` / `setmode` / `fix` / `keys` / `rm` / `rmnone` / `write` / `active` / `enable` / `migrate` / `sysmap` / `aliasmap` |
+| `eac_audit.py` | **★ 2026-11-07 新增（主机侧只读审计）**：拉取 onyxconfig → 判定每个已安装 app 是否会「点了没反应」+ 引擎开关 + 与健康机对照；退出码 0/1/2 可直接进检查清单 |
 | `SetDefCfg.java` | 写 `eac_app_<pkg>` + `eac_default_app_config<pkg>`（`NONE` + 指定 um） |
 | `DumpThemes.java` | dump 某 pkg 全部 theme（走 `EInkHelper.loadThemes`，**权威读法**） |
 | `CheckMode.java` / `SetScope.java` / `ClearScope.java` | scope 通道读数 / 设 / 清 |
 | `gs_scan_only.sh` | **只读**全量扫描（找 `um=9` 残留、统计分布） |
-| `gs_reset_all2.sh` | **按 MMKV 键**全量重置为 `NONE+5`（含已卸载 app 的残留） |
+| `gs_reset_all2.sh` | **按 MMKV 键**全量重置为 `NONE+5`（含已卸载 app 的残留）— ⚠️ 已过时，见上方 11-07 修正 |
 | `gs_health.sh` | 设备健康：reset / `wait all_lut_free` / `update_err` / vcom / scope / 前台 |
+
+**审计（改机前后都跑同一条）**：
+
+```powershell
+$env:ADB='C:\...\platform-tools\adb.exe'
+python tools/refresh/eac_audit.py --pull --serial <serial> --donor .diag/ORIG_mmkv_onyx_config
+# 历史快照复现故障态：
+python tools/refresh/eac_audit.py --mmkv .diag/NEW_mmkv_onyx_config --installed .diag/live/installed.txt
+```
 
 **用法示例**
 

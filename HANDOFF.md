@@ -31,6 +31,12 @@
 | **设备当前内核** | v6-A2 patched（`#79 Mon Mar 16 18:22:03`），刷在 `boot_b`，槽位 `_b` |
 | **工作区根** | `C:\Users\root\Documents\eink`（`ref.md` 在此，**不在 git 仓库内**）|
 
+> **★ 2026-11-07 最新（先看 §14.23 / §14.24）**：EInk Center「净清/标准/极速」点了没反应的根因已闭环 ——
+> launcher 历史把 `refreshModeIndex` 写成 `NONE`（当年为了 `updateMode` 直通），撞上 SystemUI
+> `SelectRefreshModeAction` 的过滤顺序 bug（`toEnum(null)==NONE` ⇒ 当前 idx 是 NONE 时整条动作被跳过）。
+> 已全量清 NONE、并把优化引擎总开关恢复为 1；判据脚本 `tools/refresh/eac_audit.py`（退出码 0/1/2）。
+> 本表里的「当前提交 / 路径 / 档位」是旧值，一律以 §14 为准。
+
 **一句话现状**：黑屏问题已解决（v6 内核 patch 有效）；A2 档在故障机必然 reset（已知并规避）；
 **§6.1~§6.5 已执行完毕**：双刷机制 A 被**证伪**（因果方向反了）、§6 的 17 个 dt 属性**全部不存在**、
 **全屏 GC16 与 A2 走同一条 reset 路径**（⇒ 整屏清残影与避免 reset 物理不可兼得）。
@@ -1938,6 +1944,9 @@ system / system_ext / product / vendor / modem / xbl`。
   是否被 `loadThemeOrCreate` 重建覆盖（§14.11 遗留项）；
 - 若切**能退出**只是通知栏全局磁贴切不动 → 那是官方限制（§④ 表格第二行），不是残留。
 
+> ✅ **已闭环（2026-11-07 第十四会话）**：实测「UI 有反应、onyxconfig 0 字节写入」= 真故障；
+> 根因是 NONE 残留 + `SelectRefreshModeAction` 过滤顺序 bug，已修复。详见 **§14.23 / §14.24**。
+
 **⑤ 遗留**：`libota_jni.so` 的 `.rodata` 已 dump（16 字节重复段 `692b9bd3b4d2a55a`），
 `reorganizeSecretKey/IvParameter` 的二次混淆未完全还原；但 Poke6 的最终 Key/IV 已由
 `BooxKeys.csv` 直接给出（`DFA1B679E1089011FEB9C8455AD7E1D5` / `83BF5F0F69A76D42D742E044EA1BDACF`），
@@ -2021,8 +2030,11 @@ isRefreshModeIndexChanged() {
 恢复后同一次切换在 Legado 进程里出现 `EInkHelper: Suspicious time-consuming fetch config for pkg: com.legado.app.release`
 （= app 真的重取了配置）。
 
-⚠️ `OECService.setEnable()` **只改内存 AtomicBoolean、不落盘**；落盘在 `EACDeviceExtraConfig.save()`。
-OECService 开机从 `false` 起跑，靠上游把 01 传进来 —— 观察过一次开机后又变 00，**下次开机请用 `FixEac read` 复核 `isEnable()`**。
+⚠️ **读法修正**：`EInkHelper.isEnable()` 只是**调用进程内的缓存**（新进程恒 false，会误判）；
+权威值是 `EInkHelper.getService().isEnable()`（= `OECService` 的运行时 AtomicBoolean）。`FixEac read` 现在两个都打印。
+`OECService.setEnable()` **只改内存、不落盘**；落盘在 `EACDeviceExtraConfig.save()`（`eac_extra_config_enable`），
+开机由上游（Onyx 侧读该持久值）调 `setEACServiceConfig` 把它带起来。
+实测：`FixEac enable 0/1` → `OECService.isEnable()` 立即 false/true；置 01 后重启仍为 true。
 
 **⑥ 工具改动（`tools/refresh/FixEac.java`）**
 
@@ -2059,6 +2071,101 @@ OECService 开机从 `false` 起跑，靠上游把 01 传进来 —— 观察过
 
 - 每次面板保存会重写 ~86 条 `eac_app_*`（≈+150KB 追加），靠开机 compaction 回收 —— **一次开机内别连切几十次**，否则 2MB 会满。
 - `eac_extra_gc_after_scrolling` 仍是 0（健康机 1），这是「滚动后全刷」的用户偏好，未擅自改。
+
+### 14.24 ★★ 为什么：E-Ink 桌面（launcher）是怎样把「切档」写死的 —— 完整始末 + 可复现判据（2026-11-07 复盘）
+
+**一句话**：launcher 当年为了**持久改第三方 app 的翻页/滚动刷新档**，只能用 EAC 写
+`refreshModeIndex="NONE" + updateMode=<逻辑档>`（这是唯一能让 `updateMode` 直通、不被固件索引表覆盖的写法）。
+这批 `NONE` 落盘后，撞上官方 `SelectRefreshModeAction` 的**过滤顺序 bug**（当前 idx=NONE ⇒ 整个动作被跳过），
+于是表现为「官方面板点净清/标准/极速完全没反应」。
+
+**① 时间线（每一步都有代码/数据佐证）**
+
+| # | 时间 | launcher 做了什么 | 落盘内容 | 后果 |
+|---|---|---|---|---|
+| 0 | 项目起点 | 要「持久改第三方 app 的翻页/滚动波形」 | — | scope 通道改不了第三方合成波形（恒 GC16，§14.16）⇒ **只能走 EAC 写 onyxconfig**，这是需求上的死路 |
+| 1 | 2026-08-30~09-05 | 用 **UI/波形域常量**（`UI_REGAL_PLUS_MODE=9` 等）去写 EAC `updateMode` | `updateMode=9` | `9` 不在迁移表 ⇒ `validateRefreshConfig` 永不修正 ⇒ `caculateRefreshConfig` 恒 9 ⇒ `setAppRefreshModeImpl` `dumpError + return` ⇒ **整个刷新引擎空转**（§14.10、ref.md §9.3.x） |
+| 2 | 2026-10-11 | 修复：`reset` 把每条配置写成 `idx=NONE + um=5 + alias=""` | 546 条历史记录含 NONE（`NEW` 快照实测） | 这是当时**唯一能让引擎重新可写**的状态；但从此 `NONE` 成了持久状态 |
+| 3 | 2026-10-09~11-06 | `set/reset` 遍历 `loadThemes()`（每 app 3 个 themeType）全存；`defcfg` 再补 `eac_app_*` / `eac_default_app_config*` | 每 app 1→3 份 theme + 2 条 app 配置 | MMKV `actual` 冲到 1,962,798/2MB、墓碑 229；`eac_app_pkg_set` 被挤到 10B ⇒ **卡开机**（§14.4） |
+| 4 | 2026-11-06 | 收敛：只写 type_3 + 写前 diff + 容量守护 + cleanup；路线改成「scope 默认、EAC 手动」 | 残留 71 个 NONE theme | 当时判定「无害」——**因为没人真正验证过官方面板** |
+| 5 | 2026-11-07 | 实机 A/B：NONE 的 app 点「极速」→ **0 字节写入**；有效 idx 的 app 同操作 → 立即写入 | — | 真相：Onyx 的 filter bug 把 `NONE` 变成「切档死」 |
+
+**② 为什么非写 NONE 不可（不是随手选的）**
+
+`caculateRefreshConfig` 的规则：`refreshModeIndex != NONE` 时，用索引映射表**覆盖** `updateMode`；
+只有 `idx == NONE` 才让 `updateMode` 直通。所以要让任意逻辑档（DU/A2/…）生效，唯一写法就是 NONE。
+代价：**NONE 打破了官方「idx 恒为 refresh_mode_N」的隐含前提**，而这个前提恰好被 Onyx 自己的 bug 依赖着。
+
+**③ 为什么 NONE 会让官方面板失效（代码级）**
+
+```java
+// SystemUI: SelectRefreshModeAction.create()
+observableJust(this)
+  .filter(o -> isRefreshModeIndexChanged())    // ← 先跑；此时 realRefreshModeIndex 仍是 null
+  .doOnNext(o -> loadRealRefreshModeIndex())   // ← 后赋值
+// isRefreshModeIndexChanged():
+//   toEnum(当前 idx) != toEnum(realRefreshModeIndex==null) == NONE
+```
+
+⇒ 当前 idx=NONE 时两边都等于 NONE，filter=false，**整条链跳过**：不写盘、不 apply、不重建。
+同一个 NONE 还会让 `getRefreshModeTitle` NPE（面板标题拿到 null `RefreshModeData`）。
+
+**④ 证据（数据可复算，脚本见下）**
+
+| 快照 | 记录数 | 含 NONE 的记录 | NONE theme 键 | 已安装 app 被拦截 | `eac_extra_config_enable` |
+|---|---|---|---|---|---|
+| `.diag/ORIG_mmkv_onyx_config`（健康机） | 415 | **0** | **0** | 0 | **01** |
+| `.diag/NEW_mmkv_onyx_config`（故障机 11-06） | 1257 | **546** | **98** | **30** | **00** |
+| 本机清理后（2026-11-07） | 572 | 0（清后新写） | **0** | **0** | **01** |
+
+补充：健康机 idx 分布 = `3(50)+4(28)+1(1)+2(1)`；故障机修前 = `NONE(98)+4(1)`。修复后 = `3(49)+4(24)`，与健康机同构。
+
+**⑤ 可复现判据（三件套，改机前后各跑一次）**
+
+1. **主机侧全量审计**（新增 `tools/refresh/eac_audit.py`，只读）：
+   ```powershell
+   $env:ADB='C:\Users\admin\Downloads\platform-tools-latest-windows\platform-tools\adb.exe'
+   python tools/refresh/eac_audit.py --pull --serial 6C7F0E64 --donor .diag/ORIG_mmkv_onyx_config
+   ```
+   输出：MMKV 健康度 / 引擎开关 / idx 分布 / 每个已安装 app 的 `active type + idx` → `可切 / BLOCKED`。
+   退出码 `0`=全可切、`1`=有 NONE 拦截、`2`=引擎关闭（可直接进回归清单）。
+   历史故障态可离线复现：
+   ```powershell
+   python tools/refresh/eac_audit.py --mmkv .diag/NEW_mmkv_onyx_config --installed .diag/live/installed.txt
+   # → 30 个 BLOCKED、engine OFF
+   ```
+
+2. **机内权威读**（root app_process）：
+   ```sh
+   CLASSPATH=/data/local/tmp/fixeac2.dex app_process /system/bin io.onyx.FixEac read <pkg>
+   # 看 OECService.isEnable() / theme[2] 的 idx；不要看 EInkHelper.isEnable()（进程内缓存，恒 false）
+   ```
+
+3. **手动 A/B（2 分钟闭环，本次用它定案）**：
+   - 开一个 idx 合法的 app（或 com.onyx）→ 控制中心「优化引擎」→ 点「标准」
+     → 预期 onyxconfig 多出 `eac_theme_<pkg>@theme_type_3 = refresh_mode_4`，`getAppScopeRefreshMode()` 变 0
+   - 对一个 NONE 的 app 重复 → **onyxconfig 完全不变**（= 故障判据）
+
+**⑥ 方法论：这次为什么能定案（下次遇到同类「点了没反应」照这个顺序走）**
+
+1. **先分「写没写」再分「写了生不生效」**：不要一上来猜引擎。先拉 onyxconfig 前后快照比
+   `actual_size` + 记录数（本次：499→499 = **一个字节没写**），一眼排除「写了但没 apply」。
+2. **利用 MMKV append-only 做时间取证**：同一 key 的多次记录按文件顺序排开，就是写入历史
+   （本次据此证明 `enable` 01→00 的覆盖点、以及 NONE 的批量写入）。
+3. **必须有对照组**：① 健康机 donor 快照；② 同一台机上「idx 合法」的 app（本次 com.onyx）。
+   两组一对比，变量只剩「当前 idx 是不是 NONE」。
+4. **反编译封死调用链**：`SelectRefreshModeAction` 的 filter/doOnNext 顺序 + `RefreshModeIndex.toEnum(null)=NONE`，
+   把「现象」变成「必然」；再回头解释为什么只有 NONE 的 app 坏。
+5. **修数据、不 patch 系统**：能删键恢复出厂默认，就不去改 SystemUI；改前备份、改后跑同一判据。
+
+**⑦ 结论与回归红线**
+
+- 根因链：**需求逼出 NONE → NONE 落盘 → Onyx filter bug 把 NONE 变成静默跳过**。
+  launcher 的错不在「写 EAC」，而在：① 值域事故（已修）；② 把「修复值」选成了 NONE 并留在盘上；
+  ③ 当年的清理只删「已卸载 app」，**没处理仍安装 app 的 NONE**（漏网 71 个）。
+- **红线**：今后任何写 EAC 的路径，`refreshModeIndex` **不得写 NONE**；要「恢复默认」就删键（`FixEac rmnone`）
+  或写合法 `refresh_mode_*`。`tools/README.md` §2 已把 2026-10-11 的 `NONE+5` 建议标注作废。
+- 回归检查：`eac_audit.py` 退出码 0 + 手动 A/B 第 1 条写入成功，两者同时满足才算通过。
 
 ---
 
