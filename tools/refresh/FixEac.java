@@ -316,6 +316,28 @@ public class FixEac {
             return;
         }
 
+        if ("rmnone".equals(cmd)) {
+            // 删除所有 refreshModeIndex=="NONE" 的 eac_theme_/eac_app_/eac_default_app_config* 键
+            // （NONE 会让 EInk Center 的 SelectRefreshModeAction 静默空转，见 HANDOFF §14.23）
+            Method getStr = Class.forName(MMKV).getMethod("getString", String.class);
+            Method rm = Class.forName(MMKV).getMethod("remove", String.class);
+            Object ks = Class.forName(MMKV).getMethod("getKeysByPrefix", String.class).invoke(null, "eac_");
+            Pattern p = Pattern.compile("\"refreshModeIndex\"\\s*:\\s*\"NONE\"");
+            int n = 0;
+            for (Object o : (java.util.Set<?>) ks) {
+                String k = String.valueOf(o);
+                if (!(k.startsWith("eac_theme_") || k.startsWith("eac_app_") || k.startsWith("eac_default_app_config"))) continue;
+                String v = (String) getStr.invoke(null, k);
+                if (v != null && p.matcher(v).find()) {
+                    rm.invoke(null, k);
+                    n++;
+                    say("rm " + k);
+                }
+            }
+            say("removed " + n);
+            return;
+        }
+
         if ("setmode".equals(cmd)) {
             int m = Integer.parseInt(args[1]);
             readGlobal();

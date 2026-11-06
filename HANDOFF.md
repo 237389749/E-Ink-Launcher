@@ -2029,6 +2029,7 @@ OECService 开机从 `false` 起跑，靠上游把 01 传进来 —— 观察过
 | 命令 | 作用 |
 |---|---|
 | `rm <pkgCsv>` | 已有，本次用它清 NONE |
+| `rmnone` | **新增**：扫 `eac_` 前缀，凡值含 `"refreshModeIndex":"NONE"` 的 theme/app/default 键全删（本次删 60 个） |
 | `write <jsonFile>` | **新增**：theme JSON 原样写回（`saveEACAppThemes` + `applyEACAppTheme(…,3)`），用于恢复备份 |
 | `active <pkg> <type>` | **新增**：设 `eac_active_theme_<pkg>` |
 | `enable <0\|1>` | **新增**：`EACDeviceExtraConfig.save()` + `setEACServiceConfig`，切引擎总开关 |
@@ -2037,11 +2038,27 @@ OECService 开机从 `false` 起跑，靠上游把 01 传进来 —— 观察过
 编译：`javac -source 8 -target 8 -cp android.jar` → `d8 --min-api 30` →
 `CLASSPATH=/data/local/tmp/fixeac2.dex app_process /system/bin io.onyx.FixEac …`
 
-**⑦ 仍留着的**
+**⑦ 收尾：全量清 NONE（`FixEac rmnone`）**
 
-- 59 个 NONE theme（都在**已卸载** app：`com.dragon.read` / `com.qidian.QDReader` 等），对切换无影响，只占 ~180KB；要清用 `FixEac rm`。
+修完 4 个第三方 app 后复核发现：系统 app 的 `theme_type_1/2` 仍是 launcher 写的 NONE（71 个里剩 59 个）。
+这两个 type 不是死数据 —— 面板上的「默认推荐 / 高刷速览」两个预设按钮就是 `themeType=1/2`
+（`EinkCenterMainView` 按 `theme.getThemeType()` 建按钮，点中会 `SelectThemeAction.setActiveThemeType`）。
+一旦用户点「默认推荐」→ activeThemeType 变 1 → 又落回 NONE → **再次空转 + NPE**。
+
+所以新增 `rmnone`：扫 `eac_` 前缀，凡值里含 `"refreshModeIndex":"NONE"` 的
+`eac_theme_*` / `eac_app_*` / `eac_default_app_config*` 一律删（本次 60 个）。删后：
+
+| 指标 | 值 |
+|---|---|
+| theme idx 分布 | `refresh_mode_3` 48 + `refresh_mode_4` 25，**NONE = 0** |
+| alive key | 268（修前 342） |
+| crc | OK |
+| 实测 | 切「极速」照常写入，`getAppScopeRefreshMode()=2` |
+
+**⑧ 运维注意**
+
 - 每次面板保存会重写 ~86 条 `eac_app_*`（≈+150KB 追加），靠开机 compaction 回收 —— **一次开机内别连切几十次**，否则 2MB 会满。
-- `eac_extra_gc_after_scrolling` 仍是 0（健康机 1），这是用户偏好，未擅自改。
+- `eac_extra_gc_after_scrolling` 仍是 0（健康机 1），这是「滚动后全刷」的用户偏好，未擅自改。
 
 ---
 
