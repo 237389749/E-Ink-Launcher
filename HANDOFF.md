@@ -2032,9 +2032,9 @@ isRefreshModeIndexChanged() {
 
 ⚠️ **读法修正**：`EInkHelper.isEnable()` 只是**调用进程内的缓存**（新进程恒 false，会误判）；
 权威值是 `EInkHelper.getService().isEnable()`（= `OECService` 的运行时 AtomicBoolean）。`FixEac read` 现在两个都打印。
-`OECService.setEnable()` **只改内存、不落盘**；落盘在 `EACDeviceExtraConfig.save()`（`eac_extra_config_enable`），
-开机由上游（Onyx 侧读该持久值）调 `setEACServiceConfig` 把它带起来。
-实测：`FixEac enable 0/1` → `OECService.isEnable()` 立即 false/true；置 01 后重启仍为 true。
+`OECService.setEnable()` **只改内存、不落盘**；落盘在 `EACDeviceExtraConfig.save()`（`eac_extra_config_enable`）。
+实测：`FixEac enable 0/1` → `OECService.isEnable()` 立即 false/true；置 01 后重启，`OECService.isEnable()` 仍为 true
+（说明开机路径会把持久值带进服务；具体读取点未逐行定位，但行为已闭环）。
 
 **⑥ 工具改动（`tools/refresh/FixEac.java`）**
 
@@ -2112,7 +2112,7 @@ observableJust(this)
 
 **④ 证据（数据可复算，脚本见下）**
 
-| 快照 | 记录数 | 含 NONE 的记录（历史，含墓碑前身） | NONE theme 键（存活） | 已安装 app 被拦截 | `eac_extra_config_enable` |
+| 快照 | 记录数 | 含 NONE 的记录（历史，含墓碑前身） | NONE theme 键（存活） | 已安装 app 被拦截（按 11-07 安装列表） | `eac_extra_config_enable` |
 |---|---|---|---|---|---|
 | `.diag/ORIG_mmkv_onyx_config`（健康机） | 415 | **0** | **0** | 0 | **01** |
 | `.diag/NEW_mmkv_onyx_config`（故障机 11-06） | 1257 | **546** | **98** | **30** | **00** |
