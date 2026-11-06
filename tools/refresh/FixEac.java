@@ -28,6 +28,11 @@ import java.util.regex.Pattern;
  *   app_process /system/bin io.onyx.FixEac setmode <logicMode>       // 等价于点面板上的档位
  *   app_process /system/bin io.onyx.FixEac fix   <pkgCsv> <logicMode> // 把 idx 归 NONE + um=logicMode
  *                                                                     // 写 themes + eac_app_ + default 键 + 全局默认
+ *   app_process /system/bin io.onyx.FixEac rm    <pkgCsv>             // 删该 pkg 的 EAC 键（清 NONE 残留）
+ *   app_process /system/bin io.onyx.FixEac write <jsonFile>           // 把 theme JSON 原样写回（恢复备份）
+ *   app_process /system/bin io.onyx.FixEac active <pkg> <type>        // 设 eac_active_theme_<pkg>
+ *   app_process /system/bin io.onyx.FixEac enable <0|1>               // EAC 优化引擎总开关
+ *   app_process /system/bin io.onyx.FixEac read  <pkgCsv>             // 只读诊断
  * 备份：/data/local/tmp/eac_bak/<key>.raw.json（原始 JSON，只备份首次）
  */
 public class FixEac {
@@ -122,6 +127,12 @@ public class FixEac {
 
     private static void readGlobal() {
         say("=== 设备级 / 全局默认 ===");
+        try {
+            say("  EInkHelper.isEnable() = " + Class.forName(EINK).getMethod("isEnable").invoke(null)
+                    + "   (EAC 优化引擎总开关 eac_extra_config_enable)");
+        } catch (Throwable t) {
+            say("  isEnable ERR " + t);
+        }
         try {
             say("  getAppScopeRefreshMode() = " + Class.forName(EINK).getMethod("getAppScopeRefreshMode").invoke(null));
         } catch (Throwable t) {
@@ -255,6 +266,53 @@ public class FixEac {
                     }
                 }
             }
+            return;
+        }
+
+        if ("enable".equals(cmd)) {
+            // enable <0|1>：EAC 优化引擎总开关（eac_extra_config_enable，ORIG 健康机 = 1）
+            // ① 先持久化到 EACDeviceExtraConfig.save()（MMKV），② 再通知服务即时生效
+            boolean en = !"0".equals(args[1]);
+            try {
+                Class<?> devCls = Class.forName("android.onyx.optimization.data.v2.EACDeviceExtraConfig");
+                Object dev = devCls.getMethod("load").invoke(devCls.newInstance());
+                dev = devCls.getMethod("setEnable", boolean.class).invoke(dev, en);
+                devCls.getMethod("save").invoke(dev);
+                say("  EACDeviceExtraConfig.save(): enable=" + en);
+            } catch (Throwable t) {
+                say("  EACDeviceExtraConfig 失败: " + t);
+            }
+            try {
+                Class.forName(EINK).getMethod("setEACServiceConfig", boolean.class, boolean.class).invoke(null, en, false);
+            } catch (Throwable t) {
+                say("  public setEACServiceConfig 失败，改走 setDebugAndEnable: " + t);
+                Method m = Class.forName(EINK).getDeclaredMethod("setDebugAndEnable", boolean.class, boolean.class);
+                m.setAccessible(true);
+                m.invoke(null, en, false);
+            }
+            Thread.sleep(800);
+            say("setEACServiceConfig(" + en + ")");
+            return;
+        }
+
+        if ("write".equals(cmd)) {
+            // write <jsonFile>：把一段 theme JSON 原样写回（saveEACAppThemes + applyEACAppTheme）
+            // 用途：把先前备份的 theme JSON 原样恢复，或写入一个 idx 合法的 theme。
+            String json = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(args[1])), "UTF-8").trim();
+            List<String> one = new ArrayList<>();
+            one.add(json);
+            Class.forName(EINK).getMethod("saveEACAppThemes", List.class).invoke(null, one);
+            Class.forName(EINK).getMethod("applyEACAppTheme", String.class, int.class).invoke(null, json, 3);
+            say("written " + args[1] + " (" + json.length() + " chars)");
+            return;
+        }
+
+        if ("active".equals(cmd)) {
+            // active <pkg> <type>：设置该 pkg 的生效 themeType（默认 3）
+            Class.forName("android.onyx.optimization.EACAppThemeManager")
+                    .getMethod("setActiveThemeType", String.class, int.class)
+                    .invoke(null, args[1], Integer.parseInt(args[2]));
+            say("active " + args[1] + " -> " + args[2]);
             return;
         }
 

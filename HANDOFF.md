@@ -1906,11 +1906,148 @@ payload_dumper --partitions vendor --out <dir> payload47589.bin
 3. **滑动验证可脚本化**：`deviceNc.html` 是人机验证网页，纯脚本绕过需逆向其 JS（captcha 类型未知，
    可能是滑块/点选），但这不属于「接收推送」的必要条件——`applyBeta` 接口本身只需 `{model, mac}`。
 
+### 14.22 ★★★ 第十三会话：EInk 残留再排查 —— 两个入口机制不同 + OTA 不含 onyxconfig（2026-11-07）
+
+**① OTA 固件包里没有 `onyxconfig` 分区**（51326 与 47589 都验证过）：
+
+A/B OTA payload 只含 11 个分区：`boot / dtbo / vbmeta / vbmeta_system / recovery /
+system / system_ext / product / vendor / modem / xbl`。
+**没有 `onyxconfig` / `misc` / `userdata` / `persist` / `frp`** —— 官方**从不把 onyxconfig 打进 OTA**
+（它是每机专属：序列号/MAC/VCOM 校准）。⇒ 「从 upx 挖原始 onyxconfig」这条路不通；
+原始 onyxconfig 只有 `poke6_9008/`（健康机全分区回读）这个来源。
+
+**② 「优化引擎切档」两个入口，机制不同（勿混）**：
+
+| 入口 | 改什么 | 能否切档 |
+|---|---|---|
+| **EInk Center 面板**（通知栏 EinkWise 磁贴点出，净清/标准/极速） | `eac_theme_<当前app>` 的 **`refreshModeIndex`**（`SelectRefreshModeAction.setRefreshModeIndex`） | **能切**，切成功当前 app 会退出重建（用户确认） |
+| **通知栏「刷新模式」磁贴** | `fallbackRefreshConfig.updateMode`（`setAppScopeRefreshMode`） | **切不动**：`caculateRefreshConfig` 里 idx≠NONE 时用映射表 mode 覆盖 updateMode（文档 §2254 早证） |
+
+**③ 「残留」的真相**（用户指出后实测取证）：
+
+- 实机 onyxconfig 当前 `eac_app_*` / `eac_default_app_config*` **0 残留**（已清干净）。
+- 残留全在 **74 个 `eac_theme_*`**：`refresh_mode_3`（49）+ `refresh_mode_4`（25）。
+- 健康机 donor 的 `eac_theme_*` 也是 `refresh_mode_3`(50) + `refresh_mode_4`(28)，**没有 NONE**。
+  ⇒ 这些 `refresh_mode_3/4` 是**官方云端下发的默认 EAC 配置**，不是 launcher 残留。
+- 故障机多出的 69 个 `NONE` 才是 launcher 历史写入（`set/reset`），无害。
+
+**④ 关键待验证（留给下一会话）**：用户称「原始可切刷新模式」，但**当前故障机 EInk Center
+切档是否真的失效、切的是哪个 app（第三方 vs com.onyx 系统 app）、切完会不会退出**，本轮未实机确认。
+判定方向：
+- 若 EInk Center 切第三方 app **不退出/波形不变** → 真故障，追 `eac_theme_<app>` 的 refreshModeIndex
+  是否被 `loadThemeOrCreate` 重建覆盖（§14.11 遗留项）；
+- 若切**能退出**只是通知栏全局磁贴切不动 → 那是官方限制（§④ 表格第二行），不是残留。
+
+**⑤ 遗留**：`libota_jni.so` 的 `.rodata` 已 dump（16 字节重复段 `692b9bd3b4d2a55a`），
+`reorganizeSecretKey/IvParameter` 的二次混淆未完全还原；但 Poke6 的最终 Key/IV 已由
+`BooxKeys.csv` 直接给出（`DFA1B679E1089011FEB9C8455AD7E1D5` / `83BF5F0F69A76D42D742E044EA1BDACF`），
+无需再逆向 native。
+
+### 14.23 ★★★ 第十四会话：残留 →「切档不生效」已实机闭环（根因 = `SelectRefreshModeAction` 过滤顺序 bug + 引擎总开关）（2026-11-07）
+
+**① 实机复现：§14.22 遗留的唯一待验证项已闭环**
+
+Legado 在前台 → 开 EInk Center 面板 → 点「极速」：
+- 面板圆点会移到「极速」（**UI 有反应**）
+- 但 onyxconfig **一个字节都没写**（切换前后 `actual_size` 与记录数完全相同：1,034,647 / 499）
+- app 不重启，`getAppScopeRefreshMode()` 不变 ⇒ **真故障，不是误判**
+- 每次开面板必现：`EacCommonUtils.getRefreshModeTitle NPE: RefreshModeData.getTitle() on null`
+
+对照组：`com.onyx`（theme idx = `refresh_mode_4`）同操作 → **立即写入**
+（`eac_theme_com.onyx@theme_type_3` 与 `eac_app_com.onyx` 同步改，附 `refreshModeAlias=new_speed` / `turbo=5`）。
+
+⇒ **不是面板坏，是「当前 idx=NONE」让面板静默空转。**
+
+**② 源码级根因（SystemUI 反编译 `SelectRefreshModeAction.java`）**
+
+```java
+private String realRefreshModeIndex;            // 初始 null
+create() = observableJust(this)
+    .filter(o -> isRefreshModeIndexChanged())   // ← 先跑
+    .doOnNext(o -> loadRealRefreshModeIndex()) // ← 后赋值 realRefreshModeIndex
+...
+isRefreshModeIndexChanged() {
+    return RefreshModeIndex.toEnum(getTheme().refreshConfig(topComponent()).getRefreshModeIndex())
+        != RefreshModeIndex.toEnum(this.realRefreshModeIndex);   // ← 此时恒为 null
+}
+```
+
+`RefreshModeIndex.toEnum(null)` = `NONE`（`isNullOrEmpty → NONE`，已反编译定论）。所以：
+
+| 当前 idx | filter 结果 | 后果 |
+|---|---|---|
+| `NONE` | `toEnum("NONE") == toEnum(null)` ⇒ **false** | **整个动作被跳过**（`loadRealRefreshModeIndex` 都不执行 ⇒ 不写盘、不 apply） |
+| `refresh_mode_N` | true | 正常写入 + apply |
+
+这是 Onyx 自己的**过滤顺序 bug**。健康机永远不会出现 NONE，所以没人发现；launcher 历史写下的 NONE 才把它踩出来。
+同一个 NONE 也是 `getRefreshModeAlias` NPE 的来源（面板标题拿到 null `RefreshModeData`）。
+
+**③ 修复（数据层，不 patch SystemUI）**
+
+把 4 个已安装第三方 app 的 NONE 残留整组删掉（`eac_theme_*@theme_type_1/2/3` + `eac_app_*` + `eac_default_app_config*`），
+让系统按出厂默认（`default_config_eac_app_theme_3` = `refresh_mode_3`/0）重建：
+
+| pkg | 删前 | 删后 |
+|---|---|---|
+| `com.legado.app.release` | NONE/5 ×3 | refresh_mode_3/0 |
+| `org.koreader.launcher` | NONE/5 ×3 | refresh_mode_3/0 |
+| `mark.via` | NONE/5 ×3 | refresh_mode_3/0 |
+| `web1n.stopapp` | NONE/5 ×3 | refresh_mode_3/0 |
+
+工具：`FixEac rm <pkgCsv>`（框架自己的 `BaseMMKV.remove`，走官方 MMKV，不手改文件）。
+测试中改过的 `com.onyx` theme/app 已用**备份 JSON 原样写回**（`FixEac write`，与 pre 快照逐字节一致）。
+
+**④ 修复后实测（同一台机，前后对照）**
+
+| 操作 | `theme_type_3` | `eac_app_` | `getAppScopeRefreshMode` |
+|---|---|---|---|
+| 点「标准」 | `refresh_mode_4`/0 | 同步重建 | 5 → **0** |
+| 点「极速」 | `refresh_mode_3`/2 | 同步重建 | **2**（`getFastModeIndex` 也 2） |
+
+- `EacCommonUtils` NPE 消失（修复后开面板 0 条）
+- 重启后配置保留、切换仍生效；MMKV 开机 compaction **1,807,874 → 973,090**（-835KB），crc OK
+
+**⑤ 第二层根因：EAC「优化引擎」总开关是关的**
+
+对照健康机（`.diag/ORIG_mmkv_onyx_config`，852,375 B）：
+
+| key | 健康机 | 故障机（修前） |
+|---|---|---|
+| `eac_extra_config_enable` | **01** | **00** |
+| `eac_extra_gc_after_scrolling` | 01 | 00 |
+
+`EInkHelper.isEnable()` 为 false ⇒ `getAppConfigFromService()` 返回 dummy ⇒ **各 app 进程不读 per-app EAC 配置**，
+面板写成功 app 也不会按新档位重建。已用 `EACDeviceExtraConfig.save()` + `EInkHelper.setEACServiceConfig(true)` 恢复为 01；
+恢复后同一次切换在 Legado 进程里出现 `EInkHelper: Suspicious time-consuming fetch config for pkg: com.legado.app.release`
+（= app 真的重取了配置）。
+
+⚠️ `OECService.setEnable()` **只改内存 AtomicBoolean、不落盘**；落盘在 `EACDeviceExtraConfig.save()`。
+OECService 开机从 `false` 起跑，靠上游把 01 传进来 —— 观察过一次开机后又变 00，**下次开机请用 `FixEac read` 复核 `isEnable()`**。
+
+**⑥ 工具改动（`tools/refresh/FixEac.java`）**
+
+| 命令 | 作用 |
+|---|---|
+| `rm <pkgCsv>` | 已有，本次用它清 NONE |
+| `write <jsonFile>` | **新增**：theme JSON 原样写回（`saveEACAppThemes` + `applyEACAppTheme(…,3)`），用于恢复备份 |
+| `active <pkg> <type>` | **新增**：设 `eac_active_theme_<pkg>` |
+| `enable <0\|1>` | **新增**：`EACDeviceExtraConfig.save()` + `setEACServiceConfig`，切引擎总开关 |
+| `read` | 增打印 `EInkHelper.isEnable()` |
+
+编译：`javac -source 8 -target 8 -cp android.jar` → `d8 --min-api 30` →
+`CLASSPATH=/data/local/tmp/fixeac2.dex app_process /system/bin io.onyx.FixEac …`
+
+**⑦ 仍留着的**
+
+- 59 个 NONE theme（都在**已卸载** app：`com.dragon.read` / `com.qidian.QDReader` 等），对切换无影响，只占 ~180KB；要清用 `FixEac rm`。
+- 每次面板保存会重写 ~86 条 `eac_app_*`（≈+150KB 追加），靠开机 compaction 回收 —— **一次开机内别连切几十次**，否则 2MB 会满。
+- `eac_extra_gc_after_scrolling` 仍是 0（健康机 1），这是用户偏好，未擅自改。
+
 ---
 
 *本文档由 2026-09-25 会话生成；§12 由 2026-09-29 第五会话追加；§13 由 2026-09-29 第六会话追加，
 §13.10 由 2026-10-08 第七次实测追加；**§14 由 2026-11-06 第九会话追加；§14.12–14.15 由
 2026-11-06 第十会话追加；§14.16–14.18 由 2026-11-06 第十一会话追加；§14.19–14.21 由
-2026-11-06 第十二会话追加**。*
+2026-11-06 第十二会话追加；§14.22 由 2026-11-07 第十三会话追加；§14.23 由 2026-11-07 第十四会话追加**。*
 *ref.md 的 §9.3 开头有导读框，列出最优结论与已作废判据 —— 建议从那里进入详细内容。*
 *★ 第六会话另在 ref.md 追加了 `# 十六、故障机根因定位与修复` 一节。*
