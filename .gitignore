@@ -7,9 +7,44 @@
 /build
 /captures
 *.apk
+__pycache__/
+*.pyc
 projectFilesBackup
 /.idea/sonarlint/issuestore
 .idea
 config.gradle
 KeyStore.key
 release/output.json
+
+# --- 工作区临时/大文件（不提交，见 HANDOFF.md §14） ---
+# 固件/镜像（巨型二进制）
+*.upx
+*.img
+# 回读分区目录（6GB+）
+/poke6_9008/
+/poke6_9008_new/
+# 诊断与反编译临时产物（含大 apk、MMKV 回读、__pycache__）
+/.diag/
+# 第三方 edl 工具链
+/.tools/
+# adb 临时
+/.adbtmp/
+# 输出目录（交付镜像、反编译产物）
+/out/
+# DNA 反编译参考
+/DNA-Android-main/
+# 根目录误散落的 adb/fastboot 等平台工具（非项目文件）
+/adb.exe
+/fastboot.exe
+/AdbWinApi.dll
+/AdbWinUsbApi.dll
+/etc1tool.exe
+/hprof-conv.exe
+/libwinpthread-1.dll
+/make_f2fs.exe
+/make_f2fs_casefold.exe
+/mke2fs.exe
+/mke2fs.conf
+/sqlite3.exe
+/source.properties
+/NOTICE.txt

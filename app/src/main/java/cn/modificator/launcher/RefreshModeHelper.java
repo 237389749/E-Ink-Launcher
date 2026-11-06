@@ -16,6 +16,14 @@ import java.util.Locale;
 /**
  * 墨水屏刷新模式切换 —— 仅 scope 通道（EAC 定死，不随档位写入）。
  *
+ * ★★★ 2026-11-06 定位确认：这是 launcher 的【默认主通道】，**不写 /onyxconfig、零遗留**。
+ *   · 切换 = byPass(10) 暂停 EPDC → 设/清 scope → byPass(0) 恢复 → 补一次整屏全刷；
+ *   · 一切只在内存/SF 层生效，重启即回系统默认（GC16），**绝不落盘**；
+ *   · `GlobalEacRefreshHelper`（EAC 持久改写）已降级为【独立手动工具】，平时不自动触发，
+ *     仅在需要持久改第三方 app 翻页/滚动波形时由用户手动调用（见该类头注释）。
+ *   · 代价：scope 不改变第三方 app 的合成翻页/滚动波形（恒 GC16，ref.md §6282 实测），
+ *     它只影响显式全刷/repaint；这是「零遗留」的必然取舍。
+ *
  * 模式集（**5 档** = 3 个基础波形 + None/NORMAL，采用 **scope UI/EPD 值域**，见 {@link #SCOPE_VALUES}）：
  *   None / NORMAL（清 scope）+ DU(1) / GC16(2) / A2(4)
  *
@@ -314,6 +322,11 @@ public class RefreshModeHelper {
 
   /**
    * 还原为原始状态：把每个 app 的 EAC refreshConfig 写回 **idx=NONE + updateMode=5 + alias=""**。
+   *
+   * ⚠️ ★2026-11-06 定位：这是**写 /onyxconfig 的 EAC 修复通道**（经
+   *   {@link GlobalEacRefreshHelper} reset），**平时不需要**——日常切换走纯 scope（零遗留）。
+   *   仅在检测到「刷新引擎点了没反应 / 历史残留写坏」时，由用户手动触发一次修复；
+   *   它落盘、append-only，会往 MMKV 追加记录，故不纳入日常切档路径。
    *
    * 为什么是这组值（2026-10-11 在正常机 6C1BF7D9 实测，非推测）：
    *  · `refreshModeIndex=NONE` 是刷新引擎能生效的**前提**：idx≠NONE 时 `caculateRefreshConfig`

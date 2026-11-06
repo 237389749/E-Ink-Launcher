@@ -10,6 +10,12 @@
 >
 > **★★★ 2026-10-08 第七次实测：第二层根因也解决了（`wait all_lut_free` 超时 500ms→2000ms，v7G），
 > 六个档位全部零 reset、A2/DU4 解锁、`update_err` 归零 —— 见 §13.10。**
+>
+> **★★★ 2026-11-06 第九会话（本轮）：设备「卡开机 → 落 recovery」的根因在
+> `/onyxconfig` 里的 MMKV，与 boot/内核/BCB **无关**。`eac_app_pkg_set` 从
+> **1507 B 缩到 10 B（只剩 `com.onyx`）**，且 `com.onyx` 的 theme/fallback 三键被删
+> ⇒ 启动遍历唯一成员时无配置可用 ⇒ 卡死。恢复出厂擦 `/data` 但**不擦 `/onyxconfig`**，
+> 所以修不好。配套工具：`tools/einkimg/`。**先读 §14。**
 
 ---
 
@@ -489,6 +495,69 @@ public static final String CLEAR_GHOSTING_LABEL = "清残影 — 整屏全刷（
      **09-10 11:57** 落在该窗口内 ⇒ **那次运行即写出 `9` 的元凶**；且当版是"统一写所有 app"的形态
      （`c707645` 的提交标题即 "per-app unified config"）⇒ **一次运行就把 9 写进所有 app**，与残留的广泛性吻合。
    - ⚠️ 该窗口内的 APK 本地**没有归档** ⇒ 无法给出精确 commit；能给的边界是上面那条 11 小时窗口 + 写入时刻 09-10 11:57。
+
+### 5.1-15 ★★ 2026-11-06 第八会话：故障机「还原后」刷新引擎切换失效 —— 真根因是 EAC 残留跨恢复出厂存活
+
+> ⚠️ **本节初版（本会话早些时候）把残留误判成「固件出厂默认形态」，已推翻**。那些
+> `eac_app_*` 键里全是微信/QQ/WPS/Kindle/B站漫画等用户 app，出厂固件不可能预置它们的
+> EAC 配置 ⇒ 只能是 launcher 历史批量写入、又没被卸载/恢复出厂清掉的**残留**。
+
+**症状**：故障机 `6C7F0E64` 还原/恢复出厂后，系统自带刷新引擎（通知栏面板 / 全局档）点任何
+模式都无反应。全量扫描 78 个 `eac_app_*` 键：`um=9` **0 处**（不是 §5.1-11 那次旧版 launcher
+写坏值的事故），但 `refreshModeIndex` 全是 `refresh_mode_3 / refresh_mode_4`（非 `NONE`），
+全局默认 `eac_default_app_config` = `idx=refresh_mode_3 um=0`。
+
+**近因**：`caculateRefreshConfig` 在 idx≠NONE 时忽略 `updateMode`、直接返回系统档 mode
+⇒ 面板写入全被丢弃。`getFastModeIndex()` 在模拟点击（`EInkHelper.setAppScopeRefreshMode(2)`）
+前后恒为 0 ⇒ 复现成立。这些 `refresh_mode_*` 是**固件迁移表** `{0→3,1→2,2→2,3→5,4→2}`
+把旧 `updateMode` 折成「等价索引」的结果（§5.1-9 的 `refresh_mode_N`→mode 映射）。
+
+**★★ 真正的结构性根因（用户指出后取证）**：
+
+| 证据 | 数据 |
+|---|---|
+| `/onyxconfig` 是**独立 ext4 分区** | `/dev/block/bootdevice/by-name/onyxconfig` → `mmcblk0p80`，**不在 `/data`** |
+| 恢复出厂不擦它 | 分区内仍有 `2024-08-26 init_completed`、`2025-01-11 DEVICE_SERIAL_NUMBER_KEY`、`2026-08-30 test_result_info` |
+| 卸载 app 不清 EAC | 用完整 `pm list packages`（158 个）比对：78 个 `eac_app_*` 中 **44 个属于真正已卸载的 app**（初版误用 `-3` 报成 71） |
+| 早期脚本还造了垃圾键 | `eac_theme_pkg_set@theme_type_1/2/3`（把系统内部键 `eac_app_pkg_set` 误当 pkg） |
+
+⇒ **「卸载 / 恢复出厂都有残留」是分区级结构问题**：`d7e0e42`（2026-10-11，用户记得的那次
+改动）只做了两件事 —— ① `set/defcfg` 加 `−1..5` 值域校验（止住新伤害）；② 设置页加
+「还原为原始状态」`reset` 命令（**手动**修复）。它**从未在卸载路径清理，也从不删除键**，
+而 `reset` 写的 `NONE+5` 本身只是另一组垫片值，继续留在分区里。⇒ 那次改动没有触及这个根。
+
+**本轮处置（已实测）**：
+1. 设备侧：`gs_reset_all2.sh` 全量写 `NONE+5`（save-only，备份 `eac_bak/`）+ 重启 ⇒
+   面板点 DU `getFastModeIndex 0→2`、点 Normal `2→0` ✓（修复前纹丝不动）。
+2. 设备侧：按完整包列表删掉 **44 个已卸载 app 的 5 类键**（`eac_app_` / `default` / 3 个
+   theme）+ 3 个 `pkg_set` 垃圾 theme 键，备份 `eac_residue_bak/`；重启后 `eac_app_*`
+   78→34、引擎仍正常、内核健康全 0。
+3. **代码补丁（本轮新增，弥补 `d7e0e42` 的缺口）**：
+   - `GlobalEacRefreshHelper` 新增 `cleanup` 命令：按**完整** `pm list packages` 判定未安装
+     pkg，删其 5 类键 + 3 个垃圾 theme 键；**保留**仍安装 app 的键（用户自设颜色/DPI）
+     和系统内部键 `eac_app_pkg_set`；逐键备份到 `eac_cleanup_bak/`。
+   - `enumeratePkgs()` 排除 `eac_app_pkg_set`（否则 fastjson JSONException 打断循环）。
+   - `AdminReceiver.onDisableRequested/onDisabled` 在卸载/停用前用 `SuHelper` 后台
+     `nohup … GlobalEacRefreshHelper cleanup` —— app 无卸载回调，DeviceAdmin 是唯一挂钩点
+     （与既有「恢复 Onyx 桌面」自愈同一入口）。**静态编译 + dex 实机跑通**
+     （`cleanup done: eacPkgs=34 installed=158`，不误删现存键）。
+   - ⚠️ **仍覆盖不到的场景**：用户直接 `adb uninstall` / 在设置里卸 app 而**未停用
+     DeviceAdmin**、`fastboot -w` 之外的刷机、以及 `d7e0e42` 之前已产生的历史残留。
+     这些只能靠设置页「还原为原始状态」或 `tools/refresh/` 工具手动清 —— 文档已明示。
+
+**本轮踩的坑（已修进脚本/代码）**：
+1. `FixEac keys eac_app_` 会枚举出系统内部键 **`eac_app_pkg_set`**（值 = 裸包名列表，非 JSON）。
+   传入 `FixEac` 会抛 `fastjson JSONException`，并打断 `fix` 循环 ⇒ `com.onyx.mail` 漏写。
+   `gs_reset_all2.sh` / `gs_scan_only.sh` 已加 `grep -v '^eac_app_pkg_set$'`；
+   launcher 的 `enumeratePkgs()` 也加了排除。
+2. **验证时反复点面板会把刚验证过的配置写脏**：面板写入 `um∈{0,1,2,3,4}` 后，下次重启
+   被迁移表折回「等价索引」，该 app 又回到被索引覆盖状态（§5.1-12 明载）。故最终复核
+   **只做只读扫描 + `setmode` 功能判据，判完不再重启**。
+3. 判定「已卸载」**必须用 `pm list packages` 全量**，不能用 `-3`（会把 100+ 系统 app 全
+   误判成未安装 ⇒ 误删系统 app 的 EAC 配置）。
+4. 故障机固件与正常机有差异：全局默认 `eac_default_app_config` 与 `com.onyx.mail` 等 Onyx
+   内置 app **每次重启都被重建回 `refresh_mode_*`**；但第三方 app 的生效 theme
+   （themeType 3）稳定保持 `NONE+5`，面板切换实测恢复 ⇒ 不影响使用。
 
 ### 5.2 内核 patch
 
@@ -1203,7 +1272,645 @@ update_err            0             0
 
 ---
 
+## 14. ★★★ 第九会话（2026-11-06）：卡开机 = `onyxconfig` 的 MMKV 故障，与 boot/BCB 无关
+
+> **一句话**：设备「开机动画跑很久 → 无显示 → adb unauthorized」不是卡 kernel，
+> 而是**落进了原厂 recovery**；而反复进 recovery 的根因是
+> `/onyxconfig/mmkv/onyx_config` 里 `eac_app_pkg_set` 被清到只剩 `com.onyx`，
+> 且该包的三条 EAC 键被删除 ⇒ 启动时无配置可用 ⇒ 卡死。
+> **恢复出厂擦 `/data` 但不擦 `/onyxconfig`**，所以恢复到出厂也修不好。
+
+### 14.1 现场判据（先分清「卡开机」与「在 recovery」）
+
+| 证据 | 含义 |
+|---|---|
+| USB PID = `18D1:D001`（稳定不掉线） | **在原厂 recovery**，不是卡 boot |
+| `adb devices` → `unauthorized`（且无授权框） | recovery 里 `ro.adb.secure=1` 且无 UI ⇒ 永久 unauthorized |
+| 有 bootanimation 但跑得久 | ABL 走完 boot 阶段后跳去 recovery |
+| 之后无显示 | 本机 recovery 是**盲的**：`librecovery_ui_ext.so` 的 `.text` 仅 88 B，无 EPD 初始化/波形（§3.6） |
+| 「无授权」+「无显示」 | **同一原因的两面**，不是两个故障 |
+
+> ⚠️ 教训：把 `unauthorized` 当成「adb 授权丢了」去折腾密钥是**方向错误**。
+> 先看 USB PID —— `D001` = recovery，`4EE0` = fastbootd，`4EE2` = ABL fastboot（5 秒即死），
+> `05C6:9008` = EDL。
+
+### 14.2 两次全分区回读的 md5 对比（102 个文件，78 同 / 24 异）
+
+24 个差异里，**只有 3 个与故障相关**，其余全是正常变化：
+
+| 类别 | 分区 | 说明 |
+|---|---|---|
+| **A/B 槽互换**（10 个） | `abl`/`dtbo`/`recovery`/`vbmeta`/`vbmeta_system` 的 a/b | 7-17 备份在 **B 槽**，当前在 **A 槽**，a/b 内容互为镜像 ⇒ **正常** |
+| **会随使用变**（8 个） | `gpt_*`/`frp`/`metadata`/`persist`/`uefivarstore`/`modemst1,2`/`ddr` | 恢复出厂必改 ⇒ 正常 |
+| **需关注**（3 个） | `onyxconfig` / `misc` / `super` | misc 只是 BCB（重启正常写）；super 见 §14.5 |
+
+### 14.3 ★★ 每机专属数据（**绝不可跨机覆盖**）
+
+对比两台机的 `onyxconfig` 时发现的 5 处身份数据（这是本会话最重要的安全结论）：
+
+| 文件 | 内容 | 两台机实测差异 |
+|---|---|---|
+| `DEVICE_SERIAL_NUMBER_KEY` | 14 位设备序列号 | `126525225B0481` vs `121524A30B0399` |
+| `mac_address` | 蓝牙/WiFi MAC | `00:0a:25:1d:bd:e6` vs `00:0a:be:24:f8:07` |
+| `test_result_info` | 产测记录（含 fingerprint + mac + 各项结果） | QA 日期 `2024-11-22` vs `2024-08-27` |
+| `ONYX_SYSTEM_CONFIG_KEY` | 系统设置 JSON（`deviceStatus`、笔刷新参数） | 263 B vs 189 B，字段数不同 |
+| **`com.android.vcom`** | **VCOM 电压校准**（面板专属） | 内容不同 |
+
+⇒ **整盘用备份覆盖 `onyxconfig` = 改掉序列号 + MAC + 产测 + 面板校准。禁止。**
+⇒ 而 `eac_theme_*` 的 JSON **不含任何机器专属信息**（已抽样 10 个验证 clean），
+   所以可以安全地拿别的机器的健康 theme 值做模板。
+
+### 14.4 ★★★ 根因：`eac_app_pkg_set` 被清空到只剩 1 个成员
+
+`eac_app_pkg_set` 是 OECService 启动时**遍历哪些 app 的 EAC 配置**的依据
+（`EACDeviceConfig.load()` 读它 → 逐个 `EACAppConfig.load()`）。
+
+| | 7-17 健康机 | 11-06 当前机 |
+|---|---|---|
+| `eac_app_pkg_set` | **1507 B**（几十个包：`com.zxunity… com.tencent.mobileqq com.amazon.kindle com.onyx.aiassistant …`） | **10 B（只有 `com.onyx`）** |
+| `eac_theme_com.onyx@theme_type_3` | ✅ 2832 B | ❌ **墓碑（vlen=0）** |
+| `eac_app_com.onyx` | ✅ 1952 B | ❌ **墓碑** |
+| `eac_default_app_configcom.onyx` | ✅ 1948 B | ❌ **墓碑** |
+
+**因果链**：
+
+```
+启动 → OECService.EACDeviceConfig.load()
+  → 读 eac_app_pkg_set = {"com.onyx"}          ← 集合只剩 1 个
+  → loadThemeOrCreate(com.onyx, theme_type_3)  ← 唯一成员
+  → theme_type_3 已删 → 6 级回退
+  → 回退依赖 eac_app_com.onyx / eac_default_app_configcom.onyx  ← 也全删了
+  → 全部落空 → createTheme()
+  → com.onyx 是【唯一桌面】⇒ 启动链卡死/超时 → 落 recovery
+```
+
+其余 45 个被删的包**不在 pkg_set 里**（因为 pkg_set 只剩 com.onyx），所以删它们无害。
+**真正致命的是「pkg_set 唯一的成员恰好配置全被删」这个组合。**
+
+### 14.5 MMKV 的四个认知修正（都是本会话踩过的）
+
+| 曾经的误判 | 实测真相 |
+|---|---|
+| 「46 个 theme 被写成 0 字节 = 数据损坏」 | ❌ `vlen==0` 是 **MMKV `remove()` 的墓碑**，是正常语义 |
+| 「MMKV 在 2MB 边界扩容时写坏」 | ❌ 文件结构完好；`actual_size` 一致、crc 一致、记录可完整解析 |
+| 「恢复出厂后所有残留都被清」 | ❌ `/onyxconfig` 是**独立 ext4 分区**（`mmcblk0p80`），恢复出厂**不擦** |
+| 「`eac_theme_` 出现次数 ×10 = 键 ×10」 | ❌ append-only 文件里历史记录都在，字符串计数 ≠ 有效 key 数 |
+
+**MMKV 正确语义**（详见 `tools/einkimg/README.md`）：
+- append-only：写同 key 是追加新记录，读取时**后写覆盖先写**
+- `remove()` 只追加 `vlen=0` 墓碑，**不回收空间**，运行期文件只涨不缩
+- 判断 key 状态必须取**最后一次出现**的记录
+- ⚠️ **但「只涨不缩」只在运行时单进程 append 前提下成立**（§14.12 实测修正）：
+  重启/开机后系统会做 **full write-back**，把墓碑与历史旧记录全部回收、有效键压回干净文件。
+  所以「堆积隐患会无限累积」对**开机这条路径**是过虑的；运行期逼近容量边界才是真正风险点。
+
+### 14.6 super.img 对比：系统版本完全一致
+
+**LP metadata 解不出来**（Poke6 回读镜像的 geometry magic 后字段是随机值，
+疑似被混淆）。绕开它、**暴力扫 ext4 超级块**成功定位 5 个分区：
+
+| 分区 | 起点 | 大小 | volname |
+|---|---|---|---|
+| system | `0x0100000` | 2268 MB | `/` |
+| system_ext | `0x07E400000` | 282 MB | `system_ext` |
+| product | `0x08F500000` | 526 MB | `product` |
+| vendor | `0x0AED00000` | 499 MB | `vendor` |
+| （B 槽 system 副本） | `0x0D896F000` | 2268 MB | `/` |
+
+**逐 4 MB 块 diff**（1024 块）：342 块不同，**全部集中在 2118 MB 之后**：
+
+```
+0    ~ 2118 MB   系统分区（system/vendor/product/system_ext/odm）  逐字节一致 ✅
+2118 ~ 3549 MB   userdata（app/数据/设置）                        全变（恢复出厂所致）
+3549 MB 之后     少量零散块（日志/元数据）
+```
+
+⇒ **没做过 OTA，系统本体一字未改。** 变的全是用户数据 + `onyxconfig`。
+
+### 14.7 OTA 接口逆向（结果：服务器无包）
+
+反编译 `ksync-release.apk`（83MB，含 `com.onyx.android.sdk.firmware` 完整 SDK）与
+`OnyxOtaService.apk`（389KB，只有 UpdateManager/PackageFiles，无网络逻辑）。
+
+**① 查询接口（两套，等价，均 `GET firmware/update`）**
+
+```java
+// 新 SDK：com.onyx.android.sdk.firmware.api.OnyxOTAService（classes6.dex）
+@GET("firmware/update")
+Call<Firmware> firmwareUpdate(@Query("where") String json);
+// base = ClusterHost.DEFAULT_CHINESE_DATA_HOST + "/api/" = https://data.boox.com/api/
+
+// 老 SDK：com.onyx.android.sdk.data.v1.OnyxOTAService（classes5.dex）
+// base = cloudConf.getApiBase()（同 ClusterHost，见下）
+```
+
+`where` 参数由 `FirmwareBean.currentFirmware()` 生成，字段：
+`{model, fingerprint, buildNumber, buildType, fwType, deviceMAC, submodel, lang}`
+- `model` = `Build.MODEL`（Poke6）
+- `fingerprint` = `SystemPropertiesUtil.getFingerprint()`（`ONYX/BOOX/BOOX:11/RKQ1.210614.002/200:userdebug/release-keys`）
+- `buildNumber` = `FirmwareUtils.getBuildIdFromFingerprint()`：取 fingerprint 倒数第 2 段 `200:userdebug` 的 `:` 前部分 = **200**
+- `buildType` = 同上取 `:` 后部分 = **userdebug**
+- `deviceMAC` = `NetworkUtil.getMacAddress()`
+- `submodel` = `ro.onyx.sub_model` 系统属性
+- `fwType` = `release`（或 `test`）
+- `lang` = 当前语言（如 `zh_CN`）
+
+**② 下载方式（★ 关键：地址是服务器动态返回，非本地拼装）**
+
+响应 `Firmware` 的 `downloadUrlList[]`（`List<String>`）就是固件包下载地址列表；
+`getUrl()` 取 `downloadUrlList.get(0)`。**客户端没有本地拼装下载 URL 的逻辑**，
+完全依赖服务器下发的 `downloadUrlList`。落地下载用系统 `DownloadManager`（`DownloadUtils`）
+或 `OnyxDownloadManager`（liulishuo FileDownloader 库）。
+
+响应其它字段：`md5` / `size` / `force` / `wipeData` / `changeList[]` / `buildDisplayId` / `guid` 等。
+
+**③ ClusterHost 完整 host 常量（`com.onyx.android.sdk.data.ClusterHost`）**
+
+| 常量 | 值 | 用途 |
+|---|---|---|
+| `DEFAULT_CHINESE_DATA_HOST` | `https://data.boox.com` | 国区数据/OTA 查询 |
+| `DEFAULT_AMERICAN_DATA_HOST` | `https://en-data.boox.com` | 美区数据/OTA 查询 |
+| `DEFAULT_EUR_DATA_HOST` | `https://en-data.boox.com` | 欧区（同美区） |
+| `DEFAULT_CHINESE_BOOX_HOST` | `https://send2boox.com` | 国区主站 |
+| `DEFAULT_AMERICAN_BOOX_HOST` | `https://push.boox.com` | 美区主站 |
+| `DEFAULT_EUR_BOOX_HOST` | `https://eur.boox.com` | 欧区主站 |
+| `DEFAULT_CHINESE_MATERIAL_HOST` | `https://client.send2boox.com` | 国区资源 |
+| `DEFAULT_AMERICAN_MATERIAL_HOST` | `https://en-client.boox.com` | 美区资源 |
+| `DEFAULT_CHINESE_LOG_HOST` | `https://log.boox.com` | 国区日志 |
+| `DEFAULT_TEST_HOST` | `https://dev.send2boox.com` | 测试 |
+
+⇒ **OTA 固件下载链路**：`GET {data-host}/api/firmware/update?where=<JSON>` → 服务器判定
+→ 有包则 `downloadUrlList[]` 返回 CDN 直链 → `DownloadManager`/FileDownloader 下载。
+**下载地址的域名由服务器决定，不在客户端代码里。**
+
+**④ v1 接口里的其它 OTA 相关端点（非固件主链路）**
+
+`com.onyx.android.sdk.data.v1.OnyxOTAService` 还有：
+- `POST firmware/downloadFirmware` → `reportFirmwareUpdate`（**上报**固件下载记录，非下载）
+- `POST TpFirmwares/getUpdate` → 触控面板(TP)固件查询
+- `POST betaGroups/applyBeta` / `cancelBeta` / `queryBeta` → beta 测试组
+- `GET app/list` / `app/batchUpdate` / `app` → 应用商店的 App 更新（非系统固件）
+- `GET apks/*` / `categories/app` / `deviceconfigs/query` → 应用商店
+
+**⑤ 实测结果（`.diag/ota_probe*.py` 早期尝试，已作废见 §14.20）**
+
+- 缺 `deviceMAC` → HTTP 500（报错暴露服务端路径 `firmware.model.js:418`）
+- 补齐 → **HTTP 204（无更新）**
+- buildNumber 0~201 / 5 种 model 写法 / 3 种 submodel / 2 个 host **全部 204**
+- ⚠️ 服务器弱 DH：OpenSSL 3.x 需 `ctx.set_ciphers("DEFAULT@SECLEVEL=1")`
+
+~~⇒ 当前拿不到 Poke6 固件包。~~ **【作废】**——§14.20 实测：正确的查询法是
+`buildNumber:0` + 空 `fingerprint` + 空 `deviceMAC` + 正确 model 名，且要加
+第三个服务器 `data.onyx-international.cn`。用真实 `buildNumber:200` 查询只会 204
+（服务器判定「已是最新」）。Poke6 固件包已实测拿到。
+
+### 14.8 修复方案与实测产物
+
+**`out/onyxconfig_fixed.img`**（25,165,824 B，md5 `fcca658d4cf46f86b52041e21bc87250`）
+
+做法（`tools/einkimg/repair.py`，可复现）：
+
+1. **底 = 当前机镜像**（`poke6_9008_new`）⇒ 25 个文件里 23 个逐字节不动
+2. 只往 MMKV **append** 3 条记录（+6818 B，`actual_size` 1962798 → 1969616，未超 2 MB）
+3. 同步重算 `onyx_config.crc`（`crc[0] = CRC32(mmkv[4:4+actual])`）
+4. 自检：除 `mmkv/onyx_config` 与 `.crc` 外**零变更**
+
+```
+python tools/einkimg/repair.py \
+  --base  poke6_9008_new/images/onyxconfig.img \
+  --donor poke6_9008/images/onyxconfig.img \
+  --out   out/onyxconfig_fixed.img \
+  --restore 'eac_theme_com.onyx@theme_type_3,eac_app_com.onyx,eac_default_app_configcom.onyx'
+```
+
+**刷写**（EDL，只写一个分区）：
+
+```powershell
+edl --loader=<QCM6125 loader> --memory=ufs printgpt        # 先确认分区名/大小
+edl --loader=<QCM6125 loader> --memory=ufs w onyxconfig out/onyxconfig_fixed.img
+edl --loader=<QCM6125 loader> --memory=ufs w misc      out/misc_zero_1mb.img   # 顺带清 BCB
+edl --loader=<QCM6125 loader> --memory=ufs reset
+```
+
+> `out/misc_zero_1mb.img` = 1 MiB 全零，md5 `b6d81b360a5672d80c27430f39153e2c`
+> **与文档记录的官方备份完全一致**，可放心自造。
+
+### 14.9 环境坑（本会话新踩）
+
+| 坑 | 说明 |
+|---|---|
+| `bkerler/edl` 在 Windows 缺 libusb 驱动 | 报 `Please first install libusb_win32 driver from Zadig`；本项目用**高通工具箱**的 `QSaharaServer.exe` + `fh_loader.exe` 更稳 |
+| pip 装 `edl` 失败 | Python 3.13 下 `setup.py` 缺 `timecode`；改用 `git clone` + 直接跑 `edl.py` |
+| `qctool.bat edlreadall <端口> <目录> [loader]` | 高通工具箱的全分区回读入口，产出 `images/` + `for_ROM_maker/` |
+| Python 控制台 GBK | 打印中文/二进制会 `UnicodeEncodeError`，用 `$env:PYTHONIOENCODING='utf-8'` |
+| PowerShell 吃引号 | `python -c @"..."@` 里含 `"` 就会坏；**一律写成 .py 文件再跑** |
+| `$pid` 是只读变量 | PowerShell 脚本里不能赋值，否则刷屏报错 |
+
+### 14.10 launcher 的责任边界（launcher 是「容量膨胀」的累犯）
+
+`GlobalEacRefreshHelper.applySet/applyReset` 都是 `for (String t : themes)` **遍历全部
+theme 重写**并 `saveEACAppThemes`，把每个 app 从「只有 theme_type_3」写成「三套齐全」：
+
+```
+出厂形态: theme_type_1=3, theme_type_2=3, theme_type_3=74   （74 个 app 只写一份）
+当前形态: theme_type_1=79, theme_type_2=79, theme_type_3=79 （79 个 app 三套全写满）
+```
+
+⇒ 数据量膨胀 3 倍，把 2 MB 的 MMKV 推向容量边界。**这个设计缺陷至今仍在代码里。**
+
+本次崩机的直接触发器是 `FixEac rm`（删 44 个已卸载 app × 5 键 = 220 次 remove，
+产生 185 条墓碑），但**launcher 长期全量重写是把 MMKV 撑到边界的结构性原因**。
+
+**待办（未实施）**：
+1. `applySet` 只写 **theme_type_3**（active theme），不动 1/2 ⇒ 写入量降到 1/3
+2. 写前 diff：值没变就不写 ⇒ 幂等操作变零写入
+3. 容量守护：接近 2 MB 时拒绝写 / 先清理
+4. launcher 自身被卸载时清理它写下的 EAC（现有 DeviceAdmin 钩子只清「已卸载 app 的残留」）
+5. ⚠️ **`GlobalEacRefreshHelper cleanup`（本轮新增）有与本次事故同源的隐患**：
+   `runCleanup()` 逐个 `mmkvRemove()` 删除「已卸载 app」的键 ⇒ 继续制造墓碑 ⇒ 继续把
+   MMKV 推向容量边界。且它的判定用 `pm list packages`（installed），**不看 `eac_app_pkg_set`**，
+   理论上可能删掉「已从系统卸载、但名字仍留在 pkg_set 里」的 pkg 的配置。
+   **改进方向**：清理前先读 `eac_app_pkg_set`，凡仍在其成员列表里的 pkg 一律跳过并告警；
+   长期看应改为「重建一个干净的 MMKV」（dump 有效 key → 全新文件）而非逐个 remove。
+
+### 14.11 未闭环 / 待验证
+
+| 项 | 状态 |
+|---|---|
+| 修复镜像实机刷入后能否正常开机 | ✅ **已刷入并正常开机**（见 §14.12） |
+| `pkg_set` 为何从 1507 B 缩到 10 B | ⚠️ 推测是 `FixEac rm` 的连锁影响，未直接验证 |
+| 是否还有其它分区被改（除已比对项） | ⚠️ 只比了 102 个命名分区，`Unalloc_*` 未逐个比对 |
+| 「只写 theme_type_3」是否会被 `loadThemeOrCreate` 重建覆盖 | ✅ **已反编译 framework 定论**（见 §14.13） |
+
+### 14.12 ★ 实机刷入验证 + 「堆积」自愈（2026-11-06 第十会话）
+
+**修复镜像 `out/onyxconfig_fixed.img` 已实机刷入并正常开机**（设备 `6C7F0E64`，
+adb `device` 状态，非 recovery）。拉取实机 `/onyxconfig/mmkv/onyx_config`（shell 可直读，文件 777）
+与刷入前 fixed 镜像、donor 健康机逐项对比，结论是**反转**：
+
+| 指标 | 刷入前 fixed 镜像 | **实机现在** | donor 健康机 |
+|---|---|---|---|
+| actual_size | 1,969,616（逼近 2MB） | **1,440,561**（余量 656KB） | 852,375 |
+| 记录总数 | 1260 | **707** | 415 |
+| 有效 key | 252 | **298** | 273 |
+| **墓碑** | **182** | **0** | 0 |
+| crc | OK | **OK** | — |
+
+**核心发现：墓碑 182→0、actual 1.97MB→1.44MB。** MMKV 是 append-only，运行期单靠写入只会涨不会缩；
+墓碑被物理清零、体积下降只有一个可能——**开机/启动阶段系统对 MMKV 做了一次 full write-back
+（compaction）**，把墓碑和几十轮累积的旧记录一次性回收。
+
+**`eac_app_pkg_set` 也被系统自己修好了**（正确的 varint 解码后）：
+
+| | 内容 |
+|---|---|
+| 刷入时 | 10 B，只剩 `com.onyx`（卡开机根因） |
+| 实机现在 | **1523 B，73 个包** |
+| donor | 1507 B，72 个包 |
+
+差异全部解释得通：donor 有而实机无的 `com.x1y9.probe`（测试包已卸）、`com.android.permissioncontroller`
+（现走 apex）；实机多出的 `com.bilibili.comic`、`com.tencent.weread.eink`、`com.topjohnwu.magisk`
+（`pm path` 已确认 magisk 真装）。**每个 pkg_set 成员都有完整 EAC 配置，无一缺失**；三个当初恢复的
+关键键（`eac_theme_com.onyx@theme_type_3`/`eac_app_com.onyx`/`eac_default_app_configcom.onyx`）均在。
+
+⇒ **结论**：刷入的 fixed 镜像只是给了系统一个能起跑的起点；真正把 MMKV 从「堆积+墓碑」状态清干净、
+并把 pkg_set 重建回完整形态的，是系统启动时自己的逻辑。**当前 onyxconfig 状态干净、健康、crc 正确，
+无需再做任何刷写或清理动作。**
+
+### 14.13 ★ framework 反编译：`saveEACAppThemes` 按 JSON 内容映射 key（待办 1 可行性定论）
+
+从设备拉 `framework.jar`（33.5MB，4 个 dex）用 jadx 反编译，把 `applySet` 的写入链封死：
+
+```
+EInkHelper.saveEACAppThemes(List)                    [framework.jar: EInkHelper.java]
+→ OECService.saveEACAppThemes(List)                  [OECService.java:1872]
+→ new SaveEACAppThemesAction(List).execute()
+→ 逐条 FastJSONUtils.parseObject(json, EACAppTheme)  [SaveEACAppThemesAction:44-50]
+→ theme.save()                                       [:26]
+→ saveValue(myThemeKey(), …)                          [EACAppTheme.java:126-132]
+→ myThemeKey() = themeKey(getPkg(), getThemeType())   [EACAppTheme.java:139-141]
+→ "eac_theme_<pkg>@theme_type_<type>"                [EACThemeUtil.java:30-32]
+```
+
+**三个源码级定论**：
+1. **映射与 list 顺序/长度无关**：`save()` 用 JSON 反序列化后对象的 `pkg`+`themeType` 字段生成 key。
+   ⇒ 只传 1 个 type_3 的 JSON，就只写 type_3 一个 key。旧版把 `loadThemes` 返回的 `[1,2,3]`
+   （`createThemeKeys` 固定三项，每项走 `loadThemeOrCreate` 兜底生成内存对象）全改全存，
+   就是把出厂「仅 type3」形态（donor 71/74 包只有 type_3）膨胀成「三套齐全」≈3 倍写入量。
+2. **生效的只有 type_3**：`EACAppThemeManager.DEFAULT_ACTIVE_THEME = 3`，`getActiveThemeType(pkg)`
+   默认 3，launcher 从不改 ⇒ **只写 type_3 安全且正确**（待办 1 可行）。
+3. **`getInt/optInt` 读 `themeType` 字段**：theme JSON 末尾有 `"themeType":3`（实测确认），
+   用它判定 active theme 比按 list 下标更可靠。
+
+### 14.14 ★ launcher 堆积根因修复（§14.10 待办 1–5 收敛补全，已改代码）
+
+`app/src/main/java/cn/modificator/launcher/GlobalEacRefreshHelper.java`：
+
+| 待办 | 改动 |
+|---|---|
+| 1 只写 theme_type_3 | `applySet`/`applyReset` 循环内 `if (root.optInt("themeType", -1) != 3) continue;`，type 1/2 不再写 |
+| 2 写前 diff | `applySet`/`applyDefaultCfg`（`writeDefaultCfgKey`）/`applyReset`（`writeResetKey`+`resetThemeJson`）都做写前 diff，目标值已等于现值就跳过 ⇒ 幂等操作零写入；全跳过返回 `no-change … save skipped` |
+| 3 容量守护 | `hasMmkvCapacity()`：读 `/onyxconfig/mmkv/onyx_config` 头 4 字节 LE 的 actual_size，剩余 `< 256KB` 时拒绝写入（提示重启让系统 full write-back 回收）。挂到 `main()` 所有写命令入口（`set`/`defcfg`/`reset`/`restore` 的 `init()` 之后、以及 `cleanup` 分支内），不足时 `System.exit(4)` |
+| 5 cleanup 不看 pkg_set 的隐患 | `runCleanup()` 新增 `readPkgSetMembers()`：读系统内部键 `eac_app_pkg_set`（StringSet 语义），凡仍在其成员列表里的 pkg 一律跳过并告警，避免删掉「已卸载但名字仍留 pkg_set」的 pkg 配置（重蹈卡开机） |
+
+**语法校验**：`javac -source 17 -target 17 -cp android.jar + HiddenApiBypass stub` 编译通过（退出码 0，
+仅剩原有的 unchecked 警告）。**未跑完整 gradle 构建**（本机无 gradle 9.1.0 / compileSdk 36 /
+hiddenapibypass 依赖缓存，完整构建需联网耗时）。
+
+### 14.16 ★★★ 路线调整：默认纯 scope，EAC 降级为独立手动工具（2026-11-06 第十一会话）
+
+**用户决定**：切换刷新模式**不能再给 onyxconfig 遗留问题**，即便牺牲便捷性。落地为——
+
+1. **默认走纯 scope 通道**（`RefreshModeHelper`）：byPass + applyAppScopeUpdate + repaint，
+   **不写 /onyxconfig、不落盘、重启即回系统默认 GC16**。
+2. **EAC 方案（`GlobalEacRefreshHelper`）不删除**，而是「收敛补全 + 独立出来 + 备注」，**平时不自动触发**，
+   仅在需要持久改第三方 app 翻页/滚动波形、或修复历史残留时由用户手动调用。
+
+**代价（必须接受的 trade-off）**：scope 通道**不改第三方 app 的合成翻页/滚动波形**（恒 GC16，
+ref.md §6282 实测），只影响显式全刷/repaint。这是「零遗留」的物理必然——改真实翻页波形只能走
+EAC 写 onyxconfig（落盘、append-only、有累积风险），两者不可兼得。
+
+**代码定位标注**：`RefreshModeHelper` 类头、`GlobalEacRefreshHelper` 类头、
+`RefreshModeHelper.resetRefreshConfig()` 均已加「默认 scope / EAC 是手动工具 / 平时不启用」的定位注释。
+
+### 14.17 ★ 官方「净清/标准/极速」三档对应（实测 `poke6_systemui.json`）
+
+来源：`framework-res.apk` 的 `res/raw/poke6_systemui.json`（`refreshConfigMap` + `refreshConfig` 顺序）
++ SystemUI `strings.xml` 中文名：
+
+| 官方中文名 | refreshModeIndex | 逻辑 mode | title | Poke6 实际物理波形 |
+|---|---|---|---|---|
+| **净清** | `refresh_mode_1` | 5 = REGAL_PLUS | REGAL_PLUS | GC16 38帧（槽4=GC16副本） |
+| **标准**（高清/HD） | `refresh_mode_4` | 0 = NORMAL | HD | GC16 38帧（系统 hook 代理） |
+| **极速** | `refresh_mode_3` | 2 + turbo=5 | NEW_SPEED | GC16 38帧（槽2） |
+
+`refreshMigrateMap = {0→3, 1→2, 2→2, 3→5, 4→2}`，`refreshMigrateMapForSystemApp = {0→0, 1→2, 2→2, 4→2}`。
+
+**关键结论**：官方这三档在 Poke6 上**物理全是 GC16 38 帧**——Poke6 的 wbf 里没有独立 REGAL 短波形
+（REGAL 列被填成 GC16 副本，ref.md §6297 已修正「极速=A2」的早期误记）。真正的 A2 数据被错位放到
+mode6。**launcher 要的 DU(22帧)/A2(5帧) 短帧官方档位里根本没有**，只能走
+`refreshModeIndex=NONE + updateMode 直通`（ref.md §6305-6306、§6321 已实测 DU 直通通过）。
+
+### 14.18 遗留（第十一会话追加）
+
+| 项 | 状态 |
+|---|---|
+| 完整 gradle 构建 + 实机 dex 验证改动生效 | ⏳ 未做（环境缺 gradle/SDK 36，见 §14.14） |
+| `applyRestore`（None 档）也收敛为「只写 type_3 + diff」 | ⏳ 未做（restore 是「从备份还原原始三套 theme」语义，与 set/reset 不同，暂保留） |
+| `pkg_set` 缩水根因直接验证 | ⏳ 未做（实机已自愈，无从复现） |
+| 设置页「还原为原始状态」入口 | ✅ **已隐藏**（2026-11-06 第十二会话：从日常弹窗移除，仅靠 `GlobalEacRefreshHelper reset` 手动命令触发） |
+| LSP 替换官方三档为 GC16/DU/A2 | ⏸️ **暂停**（用户决定到此为止，见 §14.16 权衡与 §14.17 的「翻页恒 GC16」物理约束） |
+| 把正确 OTA 查询法（buildNumber:0 + 三服务器）固化进 `.diag/ota_query.py` | ✅ **已完成**（2026-11-06：`.diag/ota_query.py` 已改为 buildNumber:0 查询法 + 三服务器 + 打印 downloadUrlList） |
+
+### 14.19 ★ 系统更新组件反编译：OTA 包下载方式（2026-11-06 第十二会话）
+
+从设备拉取并反编译三个系统更新组件：
+
+| APK | 大小 | 反编译关键发现 |
+|---|---|---|
+| `OnyxOtaService.apk`（`/system/priv-app/OnyxOtaService/`） | 389 KB | 仅 `UpdateManager`（进度）+ `PackageFiles`，**无网络逻辑**，实际下载不在它 |
+| `ksync-release.apk`（`/system/app/ksync-release/`） | 83 MB | 含 `com.onyx.android.sdk.firmware` 完整 SDK：`OnyxOTAService` / `FirmwareUpdateRequest` / `Firmware` / `FirmwareUtils` |
+| `app-market-release.apk`（`/system/app/app-market-release/`） | 21 MB | 应用商店，含老版 `data.v1.OnyxOTAService` |
+
+**完整 OTA 下载链路**（源码级确证）：
+
+```
+用户点「检查更新」→ FirmwareUpdateAction → FirmwareUpdateRequest.execute()
+  → FirmwareBean.currentFirmware()            // 组装 where 参数
+  → GET {data-host}/api/firmware/update?where=<JSON>
+  → 服务器返回 Firmware.downloadUrlList[]     // ★ 下载地址由服务器动态下发
+  → Firmware.getUrl() = downloadUrlList[0]     // 取第一个
+  → DownloadUtils / OnyxDownloadManager        // 系统 DownloadManager 或 FileDownloader 库
+```
+
+**★ 核心结论（用于比对用户发现的网址）**：
+1. **下载地址不在客户端代码里硬编码**，是 `downloadUrlList[0]` 动态返回——服务器会根据
+   `model/fingerprint/buildNumber` 匹配后返回对应 CDN 直链。
+2. 客户端唯一硬编码的是**查询 host**（`data.boox.com` / `en-data.boox.com`），不是下载 host。
+3. 服务器当前对 Poke6 全部返回 204（无包），所以 `downloadUrlList` 从未被真正拿到过——
+   **无法从本机验证下载 URL 的实际域名**。
+4. 若用户发现的网址是 `*.boox.com` / `*.send2boox.com` / OSS/CDN 之类，需与
+   `downloadUrlList` 的域名比对；若 `downloadUrlList` 为空（当前 204），则用户看到的
+   网址要么来自其它机型/其它 buildNumber，要么来自服务器后端的另一套分发逻辑。
+
+**可复现脚本**：`.diag/ota_query.py`（单次查询，含 where 组装）、`.diag/ota_probe.py`
+（buildNumber 枚举）、`.diag/ota_probe2.py`（model/submodel/buildType 组合枚举）。
+反编译产物：`out/jadx_ksync/sources/com/onyx/android/sdk/firmware/`、
+`out/jadx_ota_otg/sources/com/onyx/android/onyxotaservice/`。
+
+### 14.20 ★★★ 用户发现：正确查询法实测拿到 Poke6 固件包（2026-11-06，推翻 §14.7 旧结论）
+
+**用户提供的完整 upx 固件获取链接**（两套服务器 + `buildNumber:0` 查询法）：
+
+```
+国内版：http://data.onyx-international.cn/api/firmware/update?where={"buildNumber":0,"buildType":"user","deviceMAC":"","lang":"zh_CN","model":"P6","submodel":"","fingerprint":""}
+国外版：http://data.boox.com/api/firmware/update?where={"buildNumber":0,"buildType":"user","deviceMAC":"","lang":"en_US","model":"Palma","submodel":"","fingerprint":""}
+```
+
+**★ 三个关键点（都是之前 §14.7 漏掉的）**：
+
+1. **第三个查询服务器** `data.onyx-international.cn` —— 反编译代码里**没有**（`ClusterHost`
+   只列了 `data.boox.com` / `en-data.boox.com` / `push.boox.com` 等），是国区的**新/镜像服务器**。
+2. **查询法是 `buildNumber:0` + 空 `fingerprint` + 空 `deviceMAC`**，不是本机真实值。
+   `buildNumber:0` 语义 = 「查最新版」；用本机真实 `buildNumber:200` 会被判「已最新 → 204」。
+3. **`model` 用 `P6` 或 `Poke6` 都能查到**（`P6` 是老代号，`Poke6` 是新名）。
+
+**实测结果（`out/_ota_verify2.py` + 修正版 `.diag/ota_query.py`，2026-11-06 全部验证通过）**：
+
+| 服务器 | model | 结果 | buildNumber | size | md5 | 下载 URL |
+|---|---|---|---|---|---|---|
+| `data.onyx-international.cn` | P6 | ✅ 200 | 1649 | 1,780,276,767 | `e007253b…` | `http://firmware.boox.com/e007253b…/update.upx` |
+| `data.onyx-international.cn` | **Poke6** | ✅ **200** | **47589** | **1,774,182,700** | `c063d8e9…` | `http://firmware.boox.com/c063d8e9…/update.upx` |
+| `data.boox.com`（国区旧） | **Poke6** | ✅ **200** | **51326** | **1,719,778,827** | `71db2e56…` | `http://firmware.boox.com/71db2e56…/update.upx` |
+| `data.boox.com` | Palma | ✅ 200 | 45135 | 1,657,375,093 | `08a88fc4…` | `http://firmware-us.boox.com/08a88fc4…/update.upx` |
+| `en-data.boox.com`（美区） | **Poke6** | ✅ **200** | **47589** | 1,774,182,700 | `c063d8e9…` | `http://firmware.boox.com/c063d8e9…/update.upx` |
+
+⚠️ **Poke6 固件在服务器上是动态更新的**：同一天内 `data.boox.com`（国区旧）返回的
+buildNumber 从 47589 涨到 **51326**（最新版），`en-data.boox.com`/`data.onyx-international.cn`
+仍是 47589。**要拿最新包用 `data.boox.com`（国区旧服务器）**；三个服务器返回的
+`model` 名写法（`P6` vs `Poke6`）会影响匹配到的包。
+
+**下载域名规律（★ 关键）**：
+- 国区（`data.onyx-international.cn` / `data.boox.com` 中文）→ `http://firmware.boox.com/{md5}/update.upx`
+- 美区（`data.boox.com` 英文）→ `http://firmware-us.boox.com/{md5}/update.upx`
+- **下载 URL = `{firmware-host}/{md5}/update.upx`**，路径就是固件包 md5。
+- 下载链接已验证可通（HTTP 206 分片下载正常）。
+
+**`.upx` 文件格式**：文件头是**密文**（前 14 字节是固定 magic `694acd494f615a78a39af123df79`，
+之后是 AES-CFB 密文流，无 zip/ELF 签名）。⚠️ 早期误判「前 32 字节 = md5」已更正——实为
+14 字节固定头 + 密文。
+
+**★ `.upx` 加密/解密机制（2026-11-06 反编译 + 开源工具双验证，已实测解密成功）**：
+
+`.upx` = **AES-128-CFB(segment=128) 加密的 `update.zip`**（A/B OTA 包）。算法与开源项目
+[Hagb/decryptBooxUpdateUpx](https://github.com/Hagb/decryptBooxUpdateUpx) 完全一致。
+
+**Poke6 的 Key/IV（`BooxKeys.csv` 第 94 行）**：
+```
+Key = DFA1B679E1089011FEB9C8455AD7E1D5   (16 字节 hex)
+IV  = 83BF5F0F69A76D42D742E044EA1BDACF   (16 字节 hex)
+算法 = AES.MODE_CFB, segment_size=128    (= AES/CFB/NoPadding)
+分块 = 4 KiB
+解密后前 4 字节必须 == PK\x03\x04 (zip magic)
+```
+
+解密链（`OnyxOtaService.UpdateManager.decryptPackage()` + `libota_jni.so` 反汇编）：
+```
+update.upx ──AES-128-CFB(key, iv)──> update.zip
+  key/iv 由 libota_jni.so 的 native 方法返回：
+    nativeGetSecretKey()/nativeGetIvParameter() 内部做 reorganizeSecretKey/... 混淆重组
+    最终返回的 16 字节 hex 就是上面 BooxKeys.csv 里的 Key/IV
+  混淆算法（RsaUtil.java）：DES-CFB 解 base64 → 得 hex key/iv
+    DES key = generateKey(Build.MODEL + Build.MODEL) = MD5("Poke6Poke6")[:16] = b97485d8657caf35
+    DES IV  = FFFFFFFFFFFFFFFF...
+```
+
+**★ 实测（2026-11-06）**：用 `DeBooxUpx.py Poke6 updateXXX.upx updateXXX.zip` 成功解密两个包，
+产物是标准 A/B OTA（`payload.bin` + `payload_properties.txt` + `META-INF/com/android/metadata`），
+`post-build` 均为 `...200:userdebug/release-keys`，`ota-type=AB`。
+
+**两个包的差异（payload 时间戳）**：
+| | 47589 | 51326 |
+|---|---|---|
+| post-timestamp | **1729171272** = 2024-10-17 | **1779700567** = 2026-05-25 |
+| post-security-patch | 2024-02-01 | 2024-02-01 |
+| payload.bin 大小 | 1,774,178,851 | 1,719,774,978 |
+| METADATA_SIZE | 102,412 | 105,952 |
+
+⇒ **51326 是 2026-05-25 的新构建，47589 是 2024-10-17 的旧构建**（两者同为 build 200 指纹，
+但 51326 时间戳新 1.5 年、payload 反而小 54MB，内容有增删）。提取分区后需逐分区 diff 才能定位差异。
+
+**★ 版本号实测（2026-11-06，vendor/build.prop 提取）**：
+
+| | 47589 | 51326（用户手上） |
+|---|---|---|
+| **OS 版本号** | **3.5.4** | **4.2** |
+| `ro.vendor.build.onyxid` | `2024-10-17_21-21_3.5.4_1c47fc30b9` | `2026-05-25_17-16_4.2-rel_0525_310591b52c` |
+| `ro.build.version.onyxincremental` | 1046 | 1604 |
+
+⇒ **47589 = OS 3.5.4（2024-10），51326 = OS 4.2（2026-05）**，跨两个大版本。
+- **Onyx 固件版本号看 `ro.vendor.build.onyxid`**（`日期_时间_版本号-rel_...`），**不是** AOSP 的
+  `build 号 200`（那个只是 AOSP build number，两包相同）。
+- 官网公告的「OS4.1.1 领航版」是**旧公告**：`data.boox.com`（国区旧服务器）现在返回的 51326
+  已经是 **4.2 稳定版**（2026-05-25），高于 4.1.1。`data.onyx-international.cn`/`en-data.boox.com`
+  返回的 47589 是旧版 3.5.4。
+
+**解 payload.bin**：`payload_dumper`（cyxx/extract_android_ota_payload 或 ius/`payload-dumper-go`）。
+仓库 README Note3 亦指向 `cyxx/extract_android_ota_payload`。实测：
+```
+payload_dumper --partitions vendor --out <dir> payload47589.bin
+# vendor.img 是 ext4，用 tools/einkimg/ext4fs.py 读 /build.prop
+```
+
+**★ 修正 §14.7 的结论**：Poke6 固件包**能拿到**（`http://firmware.boox.com/c063d8e924c94e582d80ebec3d365482/update.upx`，
+1.77GB，buildNumber 47589）。之前「全部 204」是因为用了错误的查询参数（真实 buildNumber + 完整 fingerprint）。
+`P6` 和 `Poke6` 是两个不同 buildNumber 的包（1649 vs 47589），需确认哪个对应这台设备。
+
+**可复现脚本**：`.diag/ota_query.py`（已固化正确查询法，`python .diag/ota_query.py Poke6 zh_CN`）。
+
+**★★ 三服务器「获取 upx 包」的访问规则对比（2026-11-07 实测，三服务器规则一致、仅固件库不同步）**：
+
+**结论：查询规则完全一样，唯一区别是返回的固件版本不同。**
+
+| 维度 | `data.boox.com`（国区主库） | `data.onyx-international.cn`（国区镜像） | `en-data.boox.com`（美区） |
+|---|---|---|---|
+| 查询接口 | 相同 `GET /api/firmware/update?where=<JSON>` | 同左 | 同左 |
+| 参数规则 | 相同 | 同左 | 同左 |
+| CDN 选择逻辑 | 相同（按 `lang`） | 同左 | 同左 |
+| **Poke6 返回包** | **51326 = OS 4.2（最新）** | 47589 = 3.5.4（旧） | 47589 = 3.5.4（旧） |
+
+⇒ 三个服务器「规则一模一样，只是固件数据库同步进度不同」：`data.boox.com` 是国区主库
+（有 Poke6 最新 4.2），另两个停留在 3.5.4。
+
+**参数规则（三服务器通用，实测）**：
+
+| 参数 | 规则 |
+|---|---|
+| `model` | **严格匹配机型名**：`Poke6` ≠ `P6`（两个不同包）。`Poke6`→4.2/3.5.4，`P6`→老代号包 |
+| `lang` | **决定区域 + 下载 CDN**：`zh_CN`=国区、`en_US`=美区 |
+| `buildNumber` | **「≥该值的包」，0/更小值=返回最新**；传当前版本号=204（无更新）。实测 0/1/47589 都→51326，传 51326→204 |
+| `buildType` | 必须匹配：Poke6 只有 `user` 有包，`userdebug`→204 |
+| `deviceMAC` | **不影响返回结果**（空/假/真都一样） |
+| `fingerprint` | 可空，不影响 |
+| `submodel` | 必须空，非空→204 |
+
+**下载 CDN 域名规则（由 `lang` 决定，不是由查询服务器决定）**：
+
+| 条件 | 下载域名 |
+|---|---|
+| `lang=zh_CN`（国区） | `http://firmware.boox.com/{md5}/update.upx` |
+| `lang=en_US`（美区） | `http://firmware-us.boox.com/{md5}/update.upx` |
+
+**机型有区域归属**：
+- **Poke6 只有国区有包**：`lang=zh_CN` 返回，`lang=en_US` → 204（美区无 Poke6）
+- **Palma 只有美区有包**：`lang=en_US` 返回，`lang=zh_CN` → 204
+
+**一句话**：拿最新国区固件 = `data.boox.com + lang=zh_CN`；拿美区机型固件（如 Palma）=
+任意服务器 + `lang=en_US`。要拿 Poke6 最新版必须用 `data.boox.com`（国区主库）。
+
+### 14.21 ★ 领航版（OTA Beta Testing）接收机制反编译（2026-11-06 第十二会话）
+
+反编译 `kcb-release.apk`（72MB，`com.onyx` 桌面/设置中心）定位到领航版完整链路。
+
+**① UI 入口**：`设置 → 系统更新 → 领航版` 由 `com.onyx` 内 `SettingsDataBundle` 判定
+`!getIsHideBetaTestingEntry()` 时显示；Fragment 为 `OTABetaTestingFragment`（`fragment_ota_beta_testing`），
+按钮文案「加入领航版 / 退出领航版」。
+
+**② 三个核心接口**（`com.onyx.android.sdk.data.v1.OnyxOTAService`，base = `cloudConf.getApiBase()`）：
+
+```java
+@POST("betaGroups/applyBeta")   Call<ResponseBody> applyBeta(BetaTestingModel)
+@POST("betaGroups/cancelBeta")  Call<ResponseBody> cancelBeta(BetaTestingModel)
+@POST("betaGroups/queryBeta")   Call<ResponseBody> queryBeta(BetaTestingModel)
+// BetaTestingModel { String model; String mac; }   ← 只有这两个字段！
+```
+
+**③ 加入/退出流程**（`ToggleOTABetaTestingAction.toggle()`）：
+```
+更新 ClusterInfo → GetSecurityVerifyDataAction（滑动验证，见④）
+  → 验证通过拿到 verifyData
+  → 若已在 beta：POST betaGroups/cancelBeta({model, mac})
+  → 若不在 beta：POST betaGroups/applyBeta({model, mac})
+  → 成功则 OTAInfoUtils.updateBetaTesting(...) 更新本地状态
+```
+**注意**：`verifyData`（滑动验证结果）**没有**传给 `applyBeta`/`cancelBeta`，body 始终只有
+`{model, mac}`。滑动验证是**前置的人机校验**，验证通过才放行后续请求。
+
+**④ 滑动验证**（`SecurityVerificationDialog`）：
+- 是一个 **WebView 弹窗**，加载 `{OnyxSend2BooxHostBaseUrl}/deviceNc.html?client=Device&lang=<locale>`
+- host = `ClusterHost.getOnyxSend2BooxHostBaseUrl()` = `https://send2boox.com`（国区）/ `https://push.boox.com`（美区）
+- 网页滑块验证完成后，通过 JS 接口 `Android.getSlideData(verifyData)` 回传验证结果
+- `verifyData` 非空即算验证通过（`checkValid`：非空即可）
+
+**⑤ beta 申请后的固件查询**（`CheckCloudOTAAction` → `OTAManager.cloudFirmwareCheckRequest`）：
+- 仍是标准 `GET firmware/update`（`FirmwareUpdateRequest`）
+- `getCurrentFirmware()` 组装：`lang = clusterInfo.getLocale()`、`deviceMAC = 真实 mac`、
+  `widthPixels/heightPixels = 屏幕分辨率`、其余用 `Firmware.currentFirmware()`
+- **关键**：beta 版固件**不是通过 `fwType=beta` 区分**，而是服务器按 `deviceMAC` 匹配
+  「该 mac 是否在 beta 组」→ 是则返回 beta 固件，否则返回稳定版/204。
+- 检查频率过滤：`CheckCloudOTAAction` 有 `21600000ms`（6 小时）节流，除非 `forceCheck`。
+
+**⑥ 反编译佐证**：
+- `OTAInfoUtils`：`isInBetaTesting()` / `updateBetaTesting(value)` 本地状态（MMKV）
+- `OTAPrefFragment.gotoBetaTesting()` → `GotoOTABetaTestingEvent` → 跳 `OTABetaTestingFragment`
+- `fragment_ota_beta_testing` / `ota_beta_testing_title/desc` / `ota_join/exit_beta_testing_*` 字符串
+- 下载后刷入：`OTAManager.startFirmwareUpdate()` → `onyx.intent.action.OTA_START` →
+  `OnyxOtaService`（§14.7 已述：解密 upx → UpdateEngine.applyPayload）
+
+**★ 结论（回答「能否反编译接收领航版推送」）**：
+1. **能**。领航版 = `POST betaGroups/applyBeta {model, mac}` + 前置 WebView 滑块验证
+   （`send2boox.com/deviceNc.html`）。申请成功后，固件查询走标准 `GET firmware/update`，
+   服务器按 mac 返回 beta 包。
+2. **无需绕过**：只要设备 mac 在 beta 组，`firmware/update` 直接返回 beta 固件；若要知道
+   领航版到底推送了哪个 buildNumber，直接对申请过 beta 的 mac 用 `.diag/ota_query.py` 查询即可。
+3. **滑动验证可脚本化**：`deviceNc.html` 是人机验证网页，纯脚本绕过需逆向其 JS（captcha 类型未知，
+   可能是滑块/点选），但这不属于「接收推送」的必要条件——`applyBeta` 接口本身只需 `{model, mac}`。
+
+---
+
 *本文档由 2026-09-25 会话生成；§12 由 2026-09-29 第五会话追加；§13 由 2026-09-29 第六会话追加，
-§13.10 由 2026-10-08 第七次实测追加。*
+§13.10 由 2026-10-08 第七次实测追加；**§14 由 2026-11-06 第九会话追加；§14.12–14.15 由
+2026-11-06 第十会话追加；§14.16–14.18 由 2026-11-06 第十一会话追加；§14.19–14.21 由
+2026-11-06 第十二会话追加**。*
 *ref.md 的 §9.3 开头有导读框，列出最优结论与已作废判据 —— 建议从那里进入详细内容。*
 *★ 第六会话另在 ref.md 追加了 `# 十六、故障机根因定位与修复` 一节。*

@@ -1,6 +1,7 @@
 # tools — 可复现的最小工具集
 
-配套文档：`HANDOFF.md` §5.1（刷新引擎/EAC 全部结论）、§5.2（内核 patch 表）、§13（设备状态）、`ref.md` §九（机理细节）。
+配套文档：`HANDOFF.md` §5.1（刷新引擎/EAC 全部结论）、§5.2（内核 patch 表）、§13（设备状态）、
+**§14（卡开机的 MMKV 根因 + 每机专属数据清单）**、`ref.md` §九（机理细节）。
 
 > ⚠️ **两台 Poke6，务必区分**：故障机 `6C7F0E64` / 正常机 `6C1BF7D9`。
 > 所有脚本都把设备序列号当参数或环境变量（`push_sh.py` 用 `EINK_DEV`，默认故障机）。
@@ -22,7 +23,58 @@ adb -s <serial> push classes.dex /data/local/tmp/fixeac.dex
 
 ---
 
-## 1. `refresh/` — 刷新引擎 / EAC（per-app 刷新模式）
+## 1. `einkimg/` — `onyxconfig` 分区诊断与修复（卡开机 / 刷新引擎失效）
+
+**症状**：开机动画跑很久 → 无显示 → `adb unauthorized`（USB PID `18D1:D001` = 在 recovery）；
+或系统能进但「优化引擎」切刷新模式点了没反应。
+
+**根因方向**：`/onyxconfig` 是**独立 ext4 分区**（`mmcblk0p80`），
+**恢复出厂不擦、卸载 app 不清**。里面 `mmkv/onyx_config`（2 MB，MMKV append-only）
+存着 `eac_app_pkg_set`（启动遍历哪些 app 的 EAC）+ 各 app 的 theme/fallback。
+`pkg_set` 被清到只剩 `com.onyx`、又恰好删了它的 theme+fallback ⇒ 启动无配置可用 ⇒ 卡死。
+
+> 详细复盘见 `HANDOFF.md` §14；格式细节与踩坑见 `einkimg/README.md`。
+
+| 文件 | 作用 |
+|---|---|
+| `einkimg.py` | `ls` / `cat` / `mmkv`（list/keys/deleted/get）/ `diff`（文件级 + MMKV 逐 key） |
+| `repair.py` | 生成修复镜像：本机镜像为底，只 append 缺失的 key，自动重算 crc，复核「只 2 个文件变」 |
+| `ext4fs.py` | ext4 只读解析（含 32/64 desc、extents、inline data、symlink、`SubFile` 切片） |
+| `mmkv.py` | MMKV 解析 + append + crc 计算（`crc[0]=CRC32(mmkv[4:4+actual])`） |
+| `find_ext4.py` | 暴力扫 ext4 超级块（绕开解不出的 LP metadata），从 super.img 里定位 system/vendor/product |
+
+**典型用法**
+
+```bash
+# 两份镜像差在哪（含「每机专属」5 处身份数据 + MMKV key 级差异）
+python tools/einkimg/einkimg.py diff A/images/onyxconfig.img B/images/onyxconfig.img
+
+# 看 MMKV：有效 key、墓碑、单个 key
+python tools/einkimg/einkimg.py cat B/images/onyxconfig.img mmkv/onyx_config out/cur
+python tools/einkimg/einkimg.py mmkv out/cur list
+python tools/einkimg/einkimg.py mmkv out/cur get eac_app_pkg_set
+
+# 生成修复镜像（--base 必须是本机！）
+python tools/einkimg/repair.py --base B/images/onyxconfig.img --donor A/images/onyxconfig.img \
+  --out out/onyxconfig_fixed.img \
+  --restore 'eac_theme_com.onyx@theme_type_3,eac_app_com.onyx,eac_default_app_configcom.onyx'
+
+# super.img 里找 ext4 分区
+python tools/einkimg/find_ext4.py super.img
+```
+
+**⚠️ 三条铁律**
+
+1. **绝不用别的机器的 `onyxconfig` 整盘覆盖** —— 会改掉
+   `DEVICE_SERIAL_NUMBER_KEY` / `mac_address` / `test_result_info` /
+   `ONYX_SYSTEM_CONFIG_KEY` / **`com.android.vcom`（VCOM 电压校准）**。
+   `repair.py` 的 `--base` 必须指向本机镜像。
+2. **只允许 `mmkv/onyx_config` 与 `.crc` 变化**（脚本末尾会自动复核）。
+3. **修复 = append**，不重写、不删墓碑（MMKV 后写覆盖先写，语义等价）。
+
+---
+
+## 2. `refresh/` — 刷新引擎 / EAC（per-app 刷新模式）
 
 **症状**：通知栏「优化引擎」→ 应用优化 → 刷新模式，切换后**毫无反应**。
 **根因**：EAC 的 `updateMode` 被写成了**波形/UI 域**的值（`UI_REGAL_PLUS_MODE = 9`），
@@ -34,6 +86,26 @@ adb -s <serial> push classes.dex /data/local/tmp/fixeac.dex
 - `NONE`：唯一能让引擎写入被采纳的状态（`idx≠NONE` 时 `caculateRefreshConfig` 忽略 `updateMode`）
 - `5`：合法逻辑域值，且**不在**迁移表 `{0→3,1→2,2→2,3→5,4→2}` 里 ⇒ 扛得住 `validateRefreshConfig`
 - 生效**需重启**（运行中的 OECService 会把内存旧值回写覆盖）
+- `alias=""`：旧版遗留的 UI 域串（`hd/du/regal_plus/...`）会在加载/校验时把 `updateMode` 重新推导回错域值，必须一并清空
+
+**★ 另一种「还原后失效」形态（2026-11-06 故障机 `6C7F0E64` 实测）**：设备还原/恢复出厂后
+MMKV 里**没有 `um=9` 这类写坏的值**，但所有 `eac_app_*` 与全局默认 `eac_default_app_config`
+都是 `refreshModeIndex=refresh_mode_3/_4`、非 `NONE` ⇒ `caculateRefreshConfig` 忽略 `updateMode`
+⇒ 面板/全局档点击后 `getFastModeIndex()` 纹丝不动。**同样用 `NONE+5` 修复**（`gs_reset_all2.sh`）。
+- ⚠️ **这些键不是出厂默认值，是残留**。`/onyxconfig` 是独立 ext4 分区（`mmcblk0p80`），
+  **恢复出厂不擦**；卸载 app 也不清它的 EAC 配置。用完整 `pm list packages` 比对，
+  78 个 `eac_app_*` 里 44 个属于已卸载 app。`d7e0e42`（2026-10-11 那次改动）只加了
+  值域校验和**手动** `reset` 入口，从未在卸载路径清理 ⇒ 本轮补了
+  `GlobalEacRefreshHelper cleanup` + `AdminReceiver` 卸载自愈（见 `HANDOFF.md` §5.1-15）。
+- ⚠️ `keys eac_app_` 会枚举出系统内部键 **`eac_app_pkg_set`**（值为裸包名列表，**不是 JSON 配置**），
+  传入 `FixEac` 会抛 `fastjson JSONException` 并打断循环 ⇒ 已在这两个 `.sh` 里用 `grep -v` 排除。
+- ⚠️ **判定「已卸载」必须用 `pm list packages` 全量**，不能用 `-3`（会把系统 app 全误判成未安装）。
+- ⚠️ **面板一旦写入 `um∈{0,1,2,3,4}`，下次重启会被迁移表折回「等价索引」**，该 app 又回到
+  「被索引覆盖 ⇒ 切换无效」⇒ 需再点一次「还原为原始状态」，或用优化引擎里的 per-app 下拉
+  （它写的就是索引）。**验证修复时不要反复点面板，否则会把刚验证过的配置又写脏。**
+- ⚠️ 故障机固件与正常机有差异：全局默认 `eac_default_app_config` 与 `com.onyx.mail` 这类
+  Onyx 内置 app 在**每次重启**都会被重建回 `refresh_mode_*`；但 77/78 个第三方 app 的
+  生效 theme（themeType 3）稳定保持 `NONE+5`，且面板切换实测恢复正常，故不影响使用。
 
 **工具**
 
@@ -62,7 +134,7 @@ adb -s <serial> shell 'su -c "CLASSPATH=/data/local/tmp/fixeac.dex app_process /
 
 ---
 
-## 2. `kernel/` — 内核（EPDC 超时 / regulator 判据）
+## 3. `kernel/` — 内核（EPDC 超时 / regulator 判据）
 
 **问题**：① `tps6518x` 的 powerup 判据是 `regmap_read(0x0F) == 0xFA`，硬件恒返回 `0xBA`
 ⇒ `regulator_enable(DISPLAY)` 永远 `-ETIMEDOUT`；② `wait all_lut_free` 超时被缩短，
@@ -81,7 +153,7 @@ adb -s <serial> shell 'su -c "CLASSPATH=/data/local/tmp/fixeac.dex app_process /
 
 ---
 
-## 3. `lib/`
+## 4. `lib/`
 
 | 文件 | 作用 |
 |---|---|
@@ -91,7 +163,7 @@ adb -s <serial> shell 'su -c "CLASSPATH=/data/local/tmp/fixeac.dex app_process /
 
 ---
 
-## 4. `boot/` — 启动模式实测 / recovery / 救砖
+## 5. `boot/` — 启动模式实测 / recovery / 救砖
 
 **结论**：ABL fastboot 是死的（`18D1:4EE2` 只活 ~5 秒）；fastbootd（`adb reboot fastboot`，
 `18D1:4EE0`）可用，但只能刷逻辑分区；原厂 recovery 无 e-ink UI、adb 默认 `unauthorized`；
@@ -112,7 +184,7 @@ adb -s <serial> shell 'su -c "CLASSPATH=/data/local/tmp/fixeac.dex app_process /
 
 ---
 
-## 5. `debloat/` — 预装用户级禁用
+## 6. `debloat/` — 预装用户级禁用
 
 只做 `pm disable-user` / `pm uninstall --user 0`，随时 `pm enable` / `install-existing` 回滚；
 不动 system/super/AVB，不影响 OTA 签名。包清单与理由见 `debloat-list.json`（t1–t4 分层），
