@@ -1926,7 +1926,7 @@ system / system_ext / product / vendor / modem / xbl`。
 
 | 入口 | 改什么 | 能否切档 |
 |---|---|---|
-| **EInk Center 面板**（通知栏 EinkWise 磁贴点出，净清/标准/极速） | `eac_theme_<当前app>` 的 **`refreshModeIndex`**（`SelectRefreshModeAction.setRefreshModeIndex`） | **能切**，切成功当前 app 会退出重建（用户确认） |
+| **EInk Center 面板**（通知栏 EinkWise 磁贴点出，净清/标准/极速） | `eac_theme_<当前app>` 的 **`refreshModeIndex`**（`SelectRefreshModeAction.setRefreshModeIndex`） | **能切**；⚠️ 旧记「切成功 app 会退出重建」**已被证伪**——反编译定论：flags=3 走热更新+全重绘，**不退出 app**（见 §14.25） |
 | **通知栏「刷新模式」磁贴** | `fallbackRefreshConfig.updateMode`（`setAppScopeRefreshMode`） | **切不动**：`caculateRefreshConfig` 里 idx≠NONE 时用映射表 mode 覆盖 updateMode（文档 §2254 早证） |
 
 **③ 「残留」的真相**（用户指出后实测取证）：
@@ -1946,6 +1946,8 @@ system / system_ext / product / vendor / modem / xbl`。
 
 > ✅ **已闭环（2026-11-07 第十四会话）**：实测「UI 有反应、onyxconfig 0 字节写入」= 真故障；
 > 根因是 NONE 残留 + `SelectRefreshModeAction` 过滤顺序 bug，已修复。详见 **§14.23 / §14.24**。
+> ⚠️ 附带的「切完会不会退出」也已定论（§14.25）：**切「刷新模式」官方本来就不退出 app**，
+> 上面「不退出」不是故障判据；「会退出」只来自预设主题/历史 launcher 热应用/引擎开关翻转三条旁路。
 
 **⑤ 遗留**：`libota_jni.so` 的 `.rodata` 已 dump（16 字节重复段 `692b9bd3b4d2a55a`），
 `reorganizeSecretKey/IvParameter` 的二次混淆未完全还原；但 Poke6 的最终 Key/IV 已由
@@ -2167,11 +2169,79 @@ observableJust(this)
   或写合法 `refresh_mode_*`。`tools/README.md` §2 已把 2026-10-11 的 `NONE+5` 建议标注作废。
 - 回归检查：`eac_audit.py` 退出码 0 + 手动 A/B 第 1 条写入成功，两者同时满足才算通过。
 
+### 14.25 ★ 为什么「切刷新模式不退出 app」是正确行为（flags 语义 + 完整调用链）（2026-11-07）
+
+**现象**：修复后切「净清/标准/极速」能切且生效，但 app **不再退出**；用户记得「以前切了会退出」。
+
+**定论**：切「刷新模式」**官方设计就是热更新、不退出 app**。现在看到的「不退出但生效」才是正确行为；
+「以前会退出」不是这条链做的，而是另外三条旁路（下面 ③）。
+
+**① 三个按钮的 `flags` 不同（SystemUI `BaseThemeAction.java`，这是分岔点）**
+
+| 面板操作 | Action | flags | app 侧处理 |
+|---|---|---|---|
+| **刷新模式**：净清/标准/极速 | `SelectRefreshModeAction` → `onRefreshModeChanged()` | **3** | 热更新：`fetchAppConfig` + 必要时全屏重绘，**不重建** |
+| **预设主题**：默认推荐/高刷速览 | `SelectThemeAction` → `addAllChangeFlag()` | **2** | 全量 apply，可能因 DPI/旋转变化重建 |
+| 个性化编辑页保存 | `SaveAndApplyConfigAction` → 单参 `applyEACAppTheme(json)`（OECService 默认 flags=2） | **2** | 同上 |
+
+**② flags 决定 app 进程走哪条处理（framework `EACConfigChangedImpl.handleEACAppConfigChangedImpl`）**
+
+```java
+if (operationFlag == 1)      onWebViewConfigChanged(...);   // 只 reload WebView
+if (operationFlag == 2)      onResetConfig(...);            // → onDefaultViewConfigChanged：查 DPI/旋转/画笔
+else if (operationFlag == 3) onRefreshModeChanged(...);     // 只 fetchAppConfig + dispatchFullRedraw
+```
+
+`onRefreshModeChanged`（flags=3）**从头到尾只有**：
+
+```java
+EInkHelper.fetchAppConfig(pkgName);
+if (shouldApplyFullRedraw(curPaintConfig, lastRefreshConfig, curRefreshConfig)) dispatchFullRedraw(token, false);
+```
+
+**没有 `recreate` / `restartPackage` / `killUid`** ⇒ 切「刷新模式」官方就不退出 app。
+（`shouldApplyFullRedraw` 只在「dither 开 && 快慢档互切」时做一次全屏重绘，是屏幕刷新，不是 activity 重建。）
+
+**③ 「退出/重建」只可能来自这三条旁路（都不是「刷新模式」按钮）**
+
+1. **预设主题 / 个性化保存（flags=2）**：`onDefaultViewConfigChanged` 里命中「旋转配置变化」时
+   `onRotationConfigChanged → mActivityThread.restartPackage(pkg)`；
+   → `ActivityManagerService.restartPackage()` = `killAppForConfigChange()`（杀进程）+ `startLaunch()`（重启）。
+   平时点预设主题，DPI/旋转一般没变，所以不重建；只有在这些配置确实变了才退出。
+2. **历史 launcher 热应用**：`GlobalEacRefreshHelper` 类头注释记录的 2026-09-10 事故——批量
+   `applyEACAppTheme` 12 个第三方 app → 逐个 activity 重建 → system_server 窗口 token 风暴 → 系统重启。
+   这是「切档会退出/重建」的历史真凶，且是 launcher 干的、不是官方面板。
+3. **切换「优化引擎」总开关（`setEnable`）**：`OECService.eacEnableStatusChangedImpl` 会
+   `killUid` 掉所有 EAC app 进程（reason=`eac_enable_status_changed`）。这是开关翻转，不是切刷新档。
+
+**④ 调用链总览（修后实机 + 反编译双证）**
+
+```
+点「刷新模式」→ SelectRefreshModeAction (flags=3)
+  → EInkHelper.applyEACAppTheme(json, 3)          [BaseThemeAction.saveAndApply]
+  → OECService.applyEACTheme(json, 3) → applyAppConfigToService(params{operation_flag=3})
+      → shouldSendConfigChangedBroadcast(旧,新) ? 只有 supportEAC/enable/scrollStyle 变化才广播
+      → TabletEACRefreshImpl.onApplyConfig：applyAppRefreshModeImpl 改 scope/波形（内存热更新，不重启）
+  → 若广播：sendOECConfigChanged(pkg, cls, isInstantUpdate=true, operationFlag=3)
+      → AMS.handleOECConfigChange → redrawCurrentActvity → app.handleEACAppConfigChanged(3)
+      → onRefreshModeChanged：fetchAppConfig + 必要时 dispatchFullRedraw  ← 无 recreate
+```
+
+**⑤ 可复现判定（下次有人再问「会不会退出」，用 logcat 一条定案）**
+
+```powershell
+adb logcat -d | grep -E "killAppForConfigChange|eac_enable_status_changed|restartPackage|handleEACAppConfigChanged"
+```
+
+- 切「刷新模式」时，**不应出现**任何一行（flags=3 不触发杀进程）。
+- 若出现 `killAppForConfigChange ... stop <pkg> due to killAppForConfigChange` ⇒ 是预设主题/全量保存（flags=2）。
+- 若出现 `killUid ... reason=eac_enable_status_changed` ⇒ 是引擎开关翻转。
+
 ---
 
 *本文档由 2026-09-25 会话生成；§12 由 2026-09-29 第五会话追加；§13 由 2026-09-29 第六会话追加，
 §13.10 由 2026-10-08 第七次实测追加；**§14 由 2026-11-06 第九会话追加；§14.12–14.15 由
 2026-11-06 第十会话追加；§14.16–14.18 由 2026-11-06 第十一会话追加；§14.19–14.21 由
-2026-11-06 第十二会话追加；§14.22 由 2026-11-07 第十三会话追加；§14.23 由 2026-11-07 第十四会话追加**。*
+2026-11-06 第十二会话追加；§14.22 由 2026-11-07 第十三会话追加；§14.23–14.25 由 2026-11-07 第十四会话追加**。*
 *ref.md 的 §9.3 开头有导读框，列出最优结论与已作废判据 —— 建议从那里进入详细内容。*
 *★ 第六会话另在 ref.md 追加了 `# 十六、故障机根因定位与修复` 一节。*
