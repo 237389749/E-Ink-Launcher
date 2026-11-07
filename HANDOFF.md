@@ -2237,11 +2237,67 @@ adb logcat -d | grep -E "killAppForConfigChange|eac_enable_status_changed|restar
 - 若出现 `killAppForConfigChange ... stop <pkg> due to killAppForConfigChange` ⇒ 是预设主题/全量保存（flags=2）。
 - 若出现 `killUid ... reason=eac_enable_status_changed` ⇒ 是引擎开关翻转。
 
+### 14.26 ★ 重置（恢复出厂 / 刷机）前后 SOP（2026-11-07 收口）
+
+**核心认知（决定重置会不会复发问题）**：恢复出厂擦 `/data`、擦 `userdata`，但 **`/onyxconfig`
+是独立 ext4 分区（`mmcblk0p80`），恢复出厂 / OTA / `fastboot -w` 都不擦它**（§5.1-15、§14.9、§14.10）。
+⇒ 只要不在 EDL 里单独写 `onyxconfig` 分区，**当前已修的干净状态（NONE=0、引擎=1）会原样保留**，
+重置本身不会复发；反过来，也别指望「重置 = 清空一切」能兜底，必须按下面验证。
+
+**① 重置前（设备还在线时做一次）**
+
+```powershell
+$env:ADB='C:\Users\admin\Downloads\platform-tools-latest-windows\platform-tools\adb.exe'
+python tools/refresh/eac_audit.py --pull --serial 6C7F0E64 --donor .diag/ORIG_mmkv_onyx_config
+# 期望退出码 0：NONE=0、eac_extra_config_enable=01、crc OK、无 BLOCKED
+# 再留一份最新备份（PC 上已有 final.img，但重置前拉一次最新更稳）：
+adb -s 6C7F0E64 shell "su -c 'cp /onyxconfig/mmkv/onyx_config /data/local/tmp/pre_reset.img; cp /onyxconfig/mmkv/onyx_config.crc /data/local/tmp/pre_reset.crc; chmod 644 /data/local/tmp/pre_reset.img /data/local/tmp/pre_reset.crc'"
+adb -s 6C7F0E64 pull /data/local/tmp/pre_reset.img .diag/live/pre_reset.img
+adb -s 6C7F0E64 pull /data/local/tmp/pre_reset.crc .diag/live/pre_reset.crc
+```
+
+**② 重置中**
+
+- 恢复出厂 / OTA / `fastboot -w`：**不要额外碰 `onyxconfig` 分区**（保持现状即可）。
+- 只有当你**故意**要动 onyxconfig 时，才用 EDL 写 `out/onyxconfig_fixed.img`——但那是
+  2026-11-06 的旧修复镜像（含 NONE 残留），**现在不要刷它**，会把你已修干净的状态倒退回残留态。
+
+**③ 重置后（首次开机后验证）**
+
+1. `getprop sys.boot_completed` == `1`，`mCurrentFocus` 是 `com.onyx` 桌面（不是 recovery / 卡 logo）。
+2. 重跑审计（主机侧脚本不依赖设备上的 dex，重置后仍可用）：
+   ```powershell
+   python tools/refresh/eac_audit.py --pull --serial 6C7F0E64 --donor .diag/ORIG_mmkv_onyx_config
+   ```
+   - 退出码 `0` → 干净，收工。
+   - 退出码 `1`（有 NONE 拦截）→ 重推工具清残留。
+   - 退出码 `2`（引擎关）→ 重推工具开引擎。
+3. 若需要写操作：PC 上已留编译好的 `classes.dex`，直接 push，无需重新编译：
+   ```powershell
+   adb -s 6C7F0E64 push .diag/eacbuild/dex/classes.dex /data/local/tmp/fixeac2.dex
+   adb -s 6C7F0E64 shell 'su -c "CLASSPATH=/data/local/tmp/fixeac2.dex app_process /system/bin io.onyx.FixEac rmnone"'   # 清 NONE
+   adb -s 6C7F0E64 shell 'su -c "CLASSPATH=/data/local/tmp/fixeac2.dex app_process /system/bin io.onyx.FixEac enable 1"'  # 开引擎
+   ```
+   （`rmnone`/`enable` 命令语义见 §14.23 ⑥；重编工具链 `javac + d8` 的路径见 §14.23 ⑥。）
+4. 手动 A/B 终验：第三方 app 前台 → 优化引擎 → 点「标准」→ `getAppScopeRefreshMode()` 变 0，
+   点「极速」→ 变 2（§14.23 ④）。这一步只需读，用 `eac_audit.py` 或
+   `CLASSPATH=... app_process ... io.onyx.FixEac read <pkg>` 都行。
+
+**④ PC 侧留档清单（重置前确认这些都在，都在 git 外、不受设备重置影响）**
+
+| 文件 | 用途 |
+|---|---|
+| `tools/refresh/eac_audit.py` | 重置后一键审计（主机侧，无需设备侧工具） |
+| `tools/refresh/FixEac.java` + `.diag/eacbuild/dex/classes.dex` | 写操作工具（源码 + 已编译 dex） |
+| `.diag/ORIG_mmkv_onyx_config` | 健康机基线（`--donor` 对照源） |
+| `.diag/live/final.img`（+ 重置前的 `pre_reset.img`） | 当前干净状态的完整备份 |
+| `.diag/live/onyx_theme3.json` / `onyx_appcfg.json` | com.onyx 恢复用 JSON |
+
 ---
 
 *本文档由 2026-09-25 会话生成；§12 由 2026-09-29 第五会话追加；§13 由 2026-09-29 第六会话追加，
 §13.10 由 2026-10-08 第七次实测追加；**§14 由 2026-11-06 第九会话追加；§14.12–14.15 由
 2026-11-06 第十会话追加；§14.16–14.18 由 2026-11-06 第十一会话追加；§14.19–14.21 由
-2026-11-06 第十二会话追加；§14.22 由 2026-11-07 第十三会话追加；§14.23–14.25 由 2026-11-07 第十四会话追加**。*
+2026-11-06 第十二会话追加；§14.22 由 2026-11-07 第十三会话追加；§14.23–14.26 由 2026-11-07 第十四会话追加**。*
 *ref.md 的 §9.3 开头有导读框，列出最优结论与已作废判据 —— 建议从那里进入详细内容。*
 *★ 第六会话另在 ref.md 追加了 `# 十六、故障机根因定位与修复` 一节。*
